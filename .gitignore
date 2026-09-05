@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# uv / virtualenvs
+.venv*/
+uv.lock
+
+# Generated data -- lives on the RunPod volume and a private HF dataset repo,
+# never in git. See docs/ for the storage plan.
+outputs/
+data/raw/
+*.jsonl
+*.jsonl.gz
+
+# Model weights -- pulled from HF to the volume cache, never stored here
+hf_cache/
+*.safetensors
+*.bin
+
+# Local
+.DS_Store
+.env

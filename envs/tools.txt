@@ -1,0 +1,18 @@
+# "tools" environment -- laptop-safe, no GPU, no CUDA.
+# Used for model verification, benchmark prep, and analysing results locally.
+#
+#   uv venv .venv-tools
+#   uv pip install --python .venv-tools -r envs/tools.txt
+#
+# scripts/verify_models.py declares its own deps inline (PEP 723) and does not
+# need this env -- just `uv run scripts/verify_models.py`.
+
+# Floors, not exact pins -- this env only reads metadata and prepares data, so
+# newest-available is what we want. The floor on transformers is the one that
+# matters: Qwen3 support (DemyAgent-4B) is not in older releases.
+# Exact pins get decided on the pod for the `gen` and `analysis` envs, where
+# vLLM and TransformerLens have real version constraints we can test against.
+
+huggingface-hub>=0.25
+transformers>=4.51
+datasets>=3.0
