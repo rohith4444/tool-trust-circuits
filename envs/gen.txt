@@ -1,0 +1,34 @@
+# "gen" environment -- trace generation. CUDA only, will not install on macOS.
+#
+# Top-level intent only, no exact pins. The versions that actually resolved are
+# frozen into envs/gen.lock.txt after installing: read this file to understand
+# what we need, install from the lock file to reproduce.
+#
+#   export HF_HOME=/workspace/hf_cache      # BEFORE installing or downloading --
+#   export UV_CACHE_DIR=/workspace/uv_cache # defaults land on the 40 GB container
+#                                           # disk and are wiped when the pod stops
+#
+#   uv venv /root/venv-gen                  # container disk: local and fast.
+#                                           # /workspace is network storage, and a
+#                                           # venv is ~30k small files.
+#   uv pip install --python /root/venv-gen -r envs/gen.txt
+#   uv pip freeze --python /root/venv-gen > envs/gen.lock.txt
+
+# Generation. Pulls its own torch -- likely a cu12 build, which runs fine on the
+# pod's CUDA 13 driver, since drivers are backward compatible.
+vllm
+
+# Models, tokenizers, benchmark loading
+transformers
+huggingface-hub
+datasets
+
+# Answer checking against ground truth
+math-verify
+
+# NOT for our code -- for the code the *model* writes. The sandbox executes
+# generated Python, and nearly every TIR trace opens with "import sympy as sp".
+# These must be importable by the subprocess that runs it.
+sympy
+numpy
+scipy
