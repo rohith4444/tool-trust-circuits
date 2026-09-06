@@ -1,0 +1,20 @@
+# "analysis" environment -- TransformerLens + EAP-IG. Runs on the pod (GPU).
+#
+#   python3 -m venv .venv-analysis              (or: uv venv .venv-analysis)
+#   .venv-analysis/bin/pip install -r envs/analysis.txt -e .
+#
+# On the pod put the venv on the container disk like VENV_GEN (see scripts/pod_env.sh).
+#
+# transformer-lens 2.18.0 is the last 2.x release. HookedTransformer is its primary
+# API; 3.x deprecates it for TransformerBridge and needs transformers>=5.9.
+# It hardcodes n_ctx=2048 for Qwen2 -- tooltrust/models/load.py overrides n_ctx.
+transformer-lens==2.18.0
+transformers>=4.57,<5
+torch>=2.6
+numpy<2
+pandas
+
+# EAP-IG is not on PyPI and the package name is `eap` (an unrelated `eap` exists on
+# PyPI -- do not `pip install eap`). Its scorers hardcode device='cuda', so the EAP
+# stage only runs on the pod. Commit pinned at implementation time.
+eap @ git+https://github.com/hannamw/EAP-IG.git@e24bafd3d22af2c59ac5a83e0a6581b89b5c05dd
