@@ -12,20 +12,25 @@ This gates the whole dataset pipeline. The exact delimiter strings decide where
 generation stops to run code, where the tool answer is parsed from, where Layer 2
 pairs inject their value, and where the intervention's post-output positions are.
 
-For ToRL and SimpleTIR we have templates from the ATTC appendix (Figures 12, 14)
-and this confirms them -- those figures show what ATTC *told* the model, not
-necessarily what the model *emits*, and papers get such details wrong. DemyAgent
-is the real unknown: its output delimiter is undocumented in the ATTC appendix,
-its model card, its repo README, and its own paper.
+Prompt format matters as much as the template. ToRL and SimpleTIR descend from
+Qwen2.5 *base* models and take a raw completion prompt, which is what the ATTC
+appendix shows. DemyAgent descends from Qwen3-4B-*Instruct*, so a raw prompt puts
+it off-distribution -- in a first run it ignored tools entirely and just reasoned
+in plain text. For it we try raw and chat-templated side by side.
 
-The trick for DemyAgent: run it with no tool attached and let it generate past
-the code block. A model trained on a fixed format usually hallucinates that
-format when no execution result arrives -- which tells us what it expects.
+Results are written to a clean file by this script. Do not pipe through tee:
+vLLM logs to stderr with carriage returns, which overwrite and destroy the
+generated text when the streams are merged.
 """
 
+import os
 import sys
 
-from vllm import LLM, SamplingParams
+# Must precede the vllm import.
+os.environ.setdefault("VLLM_LOGGING_LEVEL", "WARNING")
+
+from transformers import AutoTokenizer  # noqa: E402
+from vllm import LLM, SamplingParams  # noqa: E402
 
 # Prompt templates verbatim from the ATTC appendix; decoding from its Table 4.
 MODELS = {
@@ -43,6 +48,7 @@ MODELS = {
         "temperature": 0.0,
         "top_p": 1.0,
         "max_model_len": 4096,  # ToRL's real ceiling, inherited from Qwen2.5-Math
+        "variants": ["raw"],  # base model -- raw completion
         "expect": "```python / ```output",
     },
     "simpletir": {
@@ -68,6 +74,7 @@ MODELS = {
         "temperature": 1.0,
         "top_p": 0.7,
         "max_model_len": 8192,
+        "variants": ["raw"],  # base model -- raw completion
         "expect": "```python / Code execution result:",
     },
     "demyagent": {
@@ -91,6 +98,7 @@ MODELS = {
         "temperature": 1.0,
         "top_p": 0.6,
         "max_model_len": 8192,  # config says 262144; capped so the KV cache fits
+        "variants": ["raw", "chat"],  # Instruct-based -- chat is the likely one
         "expect": "UNKNOWN -- this is what we are here to find out",
     },
 }
@@ -107,8 +115,30 @@ CANDIDATES = [
     "```python", "```output", "```", "<code>", "</code>",
     "<interpreter>", "</interpreter>", "<tool_call>", "<tool_response>",
     "<python>", "</python>", "Code execution result",
-    "<answer>", "\\boxed{",
+    "<answer>", "<think>", "\\boxed{",
 ]
+
+
+def build_prompts(cfg, tokenizer):
+    """One (label, prompt_text) per variant we want to try."""
+    raw = cfg["template"].format(question=QUESTION)
+    out = []
+    for v in cfg["variants"]:
+        if v == "raw":
+            out.append(("raw", raw))
+        elif v == "chat":
+            if not getattr(tokenizer, "chat_template", None):
+                out.append(("chat", None))  # recorded as skipped
+                continue
+            out.append((
+                "chat",
+                tokenizer.apply_chat_template(
+                    [{"role": "user", "content": raw}],
+                    tokenize=False,
+                    add_generation_prompt=True,
+                ),
+            ))
+    return out
 
 
 def main():
@@ -118,9 +148,20 @@ def main():
 
     key = sys.argv[1]
     cfg = MODELS[key]
+    out_path = os.path.join(
+        os.environ.get("TIR_OUTPUTS", "/workspace/outputs"), f"smoke_{key}.txt"
+    )
 
-    print(f"\n{'=' * 72}\n{key}  --  {cfg['repo']}")
-    print(f"expected: {cfg['expect']}\n{'=' * 72}\n")
+    report = [
+        "=" * 72,
+        f"{key}  --  {cfg['repo']}",
+        f"expected: {cfg['expect']}",
+        f"variants: {cfg['variants']}",
+        "=" * 72,
+    ]
+
+    tokenizer = AutoTokenizer.from_pretrained(cfg["repo"], trust_remote_code=True)
+    prompts = build_prompts(cfg, tokenizer)
 
     llm = LLM(
         model=cfg["repo"],
@@ -130,30 +171,42 @@ def main():
         trust_remote_code=True,
     )
 
-    prompt = cfg["template"].format(question=QUESTION)
-    print(f"--- PROMPT ---\n{prompt}\n")
-
-    # No stop strings on purpose: we want everything, including whatever the model
-    # hallucinates where a tool result would go. That hallucination is the answer.
     params = SamplingParams(
         temperature=cfg["temperature"],
         top_p=cfg["top_p"],
-        max_tokens=1024,
+        max_tokens=2048,
         n=1 if cfg["temperature"] == 0.0 else 2,
     )
 
-    for i, out in enumerate(llm.generate([prompt], params)[0].outputs):
-        print(f"\n--- RAW OUTPUT {i} ---")
-        print(out.text)
-        print(f"--- END (finish={out.finish_reason}, {len(out.token_ids)} tokens) ---")
+    for label, prompt in prompts:
+        report += ["", "#" * 72, f"# VARIANT: {label}", "#" * 72]
+        if prompt is None:
+            report.append("SKIPPED -- tokenizer has no chat_template")
+            continue
 
-        print("\n--- DELIMITERS FOUND ---")
-        found = [(c, out.text.count(c)) for c in CANDIDATES if c in out.text]
-        for c, n in found:
-            print(f"  {c!r:<28} x{n}")
-        if not found:
-            print("  NONE -- model emitted no recognised tool format")
+        report += ["", "--- PROMPT ---", prompt, ""]
 
+        for i, out in enumerate(llm.generate([prompt], params)[0].outputs):
+            report += [
+                "",
+                f"--- OUTPUT {i} ---",
+                out.text,
+                f"--- END (finish={out.finish_reason}, {len(out.token_ids)} tokens) ---",
+                "",
+                "--- DELIMITERS FOUND ---",
+            ]
+            found = [(c, out.text.count(c)) for c in CANDIDATES if c in out.text]
+            if found:
+                report += [f"  {c!r:<28} x{n}" for c, n in found]
+            else:
+                report.append("  NONE -- model emitted no recognised tool format")
+
+    text = "\n".join(report)
+    with open(out_path, "w") as f:
+        f.write(text)
+
+    print(text)
+    print(f"\n\n>>> clean copy written to {out_path}")
     return 0
 
 
