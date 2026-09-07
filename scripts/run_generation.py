@@ -28,8 +28,29 @@ REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
 from configs.models import (  # noqa: E402
-    BENCHMARKS, MAX_FUNC_CALL, MAX_TOKENS_PER_CALL, MODELS,
+    BENCHMARK_SIZES, BENCHMARKS, MAX_FUNC_CALL, MAX_TOKENS_PER_CALL, MODELS,
 )
+
+
+def plan_batches(benchmarks, limit):
+    """Group benchmarks into runs, splitting where --limit exceeds a dataset.
+
+    math_eval.py takes one --num_test_sample for a whole comma-separated list,
+    and samples without replacement -- so asking for 50 problems from aime24
+    (30) raises "Sample larger than population" and kills the run *after* the
+    larger benchmarks have already been generated. Clamp per benchmark instead,
+    which means splitting into separate invocations when the limits differ.
+
+    limit=-1 (the full run) is unaffected: one batch, everything.
+    """
+    if limit < 0:
+        return [(benchmarks, limit)]
+
+    by_limit = {}
+    for b in benchmarks:
+        n = min(limit, BENCHMARK_SIZES.get(b, limit))
+        by_limit.setdefault(n, []).append(b)
+    return [(bs, n) for n, bs in sorted(by_limit.items(), reverse=True)]
 
 
 def raise_fd_limit():
@@ -116,14 +137,21 @@ def main():
 
     benchmarks = [b.strip() for b in args.benchmarks.split(",") if b.strip()]
 
+    batches = plan_batches(benchmarks, args.limit)
+    if len(batches) > 1:
+        print(f"split into {len(batches)} batches (--limit exceeds some datasets):")
+        for bs, n in batches:
+            print(f"  limit={n}: {','.join(bs)}")
+
     failures = []
     for key in keys:
         cfg = MODELS[key]
         seeds = cfg.get("seeds_for_rates", cfg["seeds"]) if args.for_rates else cfg["seeds"]
         for seed in seeds:
-            rc = run(key, benchmarks, args.limit, seed, args.gpu, args.out, args.dry_run)
-            if rc != 0:
-                failures.append(f"{key}/seed{seed} (exit {rc})")
+            for bs, n in batches:
+                rc = run(key, bs, n, seed, args.gpu, args.out, args.dry_run)
+                if rc != 0:
+                    failures.append(f"{key}/seed{seed}/{','.join(bs)} (exit {rc})")
 
     if failures:
         print("\nFAILED: " + ", ".join(failures))
