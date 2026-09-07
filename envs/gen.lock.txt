@@ -5,7 +5,7 @@ aiosignal==1.4.0
 annotated-doc==0.0.5
 annotated-types==0.8.0
 anthropic==1.4.0
-antlr4-python3-runtime==4.13.2
+antlr4-python3-runtime==4.7.2
 anyio==4.15.1
 apache-tvm-ffi==0.1.11
 astor==0.8.1
@@ -19,6 +19,7 @@ charset-normalizer==3.5.1
 click==8.5.0
 cloudpickle==3.1.2
 compressed-tensors==0.17.0
+contourpy==1.3.3
 cryptography==50.0.1
 cuda-bindings==13.3.1
 cuda-core==1.0.1
@@ -26,6 +27,7 @@ cuda-pathfinder==1.8.1
 cuda-python==13.3.1
 cuda-tile==1.5.0
 cuda-toolkit==13.0.3.0
+cycler==0.12.1
 datasets==5.0.1
 depyf==0.20.0
 detect-installer==0.2.1
@@ -41,6 +43,7 @@ fastar==0.12.0
 fastsafetensors==0.3.3
 filelock==3.32.5
 flashinfer-python==0.6.16.post3
+fonttools==4.64.0
 frozenlist==1.8.0
 fsspec==2026.6.0
 googleapis-common-protos==1.75.3
@@ -62,7 +65,9 @@ jiter==0.16.0
 jmespath==1.1.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+kiwisolver==1.5.1
 lark==1.2.2
+latex2sympy2==1.9.1
 latex2sympy2-extended==1.11.0
 llguidance==1.7.6
 llvmlite==0.47.0
@@ -71,6 +76,7 @@ loguru==0.7.3
 markdown-it-py==4.2.0
 markupsafe==3.0.3
 math-verify==0.9.0
+matplotlib==3.11.1
 mcp==2.1.1
 mcp-types==2.1.1
 mdurl==0.1.2
@@ -130,7 +136,9 @@ outlines-core==0.2.14
 packaging==26.3
 pandas==3.0.5
 partial-json-parser==0.2.1.1.post7
+pebble==5.2.2
 pillow==12.3.0
+platformdirs==4.11.7
 prometheus-client==0.26.0
 prometheus-fastapi-instrumentator==8.1.0
 propcache==0.5.2
@@ -148,6 +156,7 @@ pydantic-settings==2.15.0
 pygments==2.21.0
 pyjwt==2.13.0
 pynvvideocodec==2.0.4
+pyparsing==3.3.2
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.3
 python-json-logger==4.2.0
@@ -178,6 +187,7 @@ sympy==1.14.0
 tabulate==0.10.0
 tiktoken==0.14.0
 tilelang==0.1.12
+timeout-decorator==0.5.0
 tokenizers==0.23.2
 tokenspeed-mla==0.1.8
 tokenspeed-triton==3.8.10.post20260721
@@ -199,6 +209,7 @@ uvloop==0.22.1
 vllm==0.28.0
 watchfiles==1.2.0
 websockets==17.1
+word2number==1.1
 xgrammar==0.2.3
 xxhash==4.0.1
 yarl==1.24.5
