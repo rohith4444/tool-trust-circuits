@@ -1,0 +1,94 @@
+# Attribution
+
+The code in this directory is vendored from the ATTC repository and is **not our
+work**. It is the evaluation harness that produced the results in:
+
+> Xu, Ji, Luo, Li, Li, Li, Li & Zhang.
+> *When to Trust Tools? Adaptive Tool Trust Calibration For Tool-Integrated Math
+> Reasoning.* arXiv:2604.08281
+
+- **Source:** https://github.com/00Dreamer00/ATTC (via fork `rohith4444/ATTC`)
+- **Commit:** `3258c40bde8020958bbd66f5a5067d66bab0ae52`
+- **Copied:** 2026-09-06
+
+ATTC's harness is itself derived from the Qwen2.5-Math / ToRA evaluation
+pipeline, as its own file headers note.
+
+## Why vendored rather than cloned
+
+Two reasons. The intervention (Contribution 2) modifies the generation loop to
+apply steering hooks, so both arms of the before/after comparison must come from
+the same codebase -- a patch maintained against an external clone would risk the
+baseline and the intervention diverging. And a self-contained repo means one
+clone reproduces the whole pipeline.
+
+## What we copied
+
+| Path | Purpose |
+|---|---|
+| `math_eval.py` | the TIR loop: generate, stop at the tool marker, execute, reinsert, repeat |
+| `python_executor.py` | sandbox that runs model-written code |
+| `data_loader.py` | benchmark loading and schema normalisation |
+| `parser.py` | answer extraction from raw generations |
+| `grader.py` | symbolic/numeric answer checking against ground truth |
+| `evaluate.py`, `trajectory.py`, `utils.py`, `model_utils.py` | supporting |
+| `judge/analyze_tool_ignore.py` | Appendix B Tool-Ignored labelling |
+| `judge/analyze_trust_or_not.py` | Appendix B contradiction labelling |
+
+Deliberately **not** copied: `octotools/` (agent-tools library, unreachable
+after the modifications below), `search_executor.py` (search-engine TIR, we are
+code-only), the SGLang and confidence-method variants, `case_analysis/`, and the
+13 benchmarks we do not evaluate on.
+
+`data/` holds their released files for our six benchmarks, unmodified. We use
+theirs rather than fetching from source so that our reproduction gate compares
+against the same records they scored -- these benchmarks have several public
+variants with different subsets and answer normalisation.
+
+## Our modifications
+
+Two, both removing dead imports. Neither changes behaviour on any benchmark we
+evaluate, and together they mean `octotools` is never imported.
+
+### 1. `grader.py` -- commented out the `ChatOpenAI` import and instantiation
+
+```python
+# from octotools.engine.openai import ChatOpenAI
+# llm_engine = ChatOpenAI(model="gpt-4o", enable_cache=True)
+```
+
+`llm_engine` is referenced only inside `model_eval()`, which `math_equal_process()`
+calls only when `data_name == 'gpqa_diamond_mcq'` -- a multiple-choice science
+benchmark not in our set. The module-level instantiation made it an import-time
+dependency on `octotools`, which pulls a large transitive tree.
+
+`math_equal()`, the function we actually use, is pure sympy and never touches it.
+If anything did reach `model_eval()` it would now raise `NameError` rather than
+grade silently wrong -- the safe failure direction.
+
+### 2. `math_eval.py` -- made the `PerplexitySearch` import lazy
+
+```python
+elif "search-r1" in args.prompt_type or "octo-sci" in args.prompt_type:
+    from search_executor import PerplexitySearch  # lazy: search TIR only
+    executor = PerplexitySearch()
+```
+
+`PerplexitySearch` is constructed only for the `search-r1` and `octo-sci` prompt
+types. Ours are `torl`, `simpleTIR`, and `DemyAgent`, which take the
+`PythonExecutor` branch. Moving the import to the call site preserves search TIR
+for anyone who wants it while keeping `octotools` off our import path.
+
+## Runtime notes
+
+Their `requirements.txt` pins `vllm==0.8.3`; we run **0.28.0**. The API surface
+they use (`LLM(...)`, `llm.generate(prompts, SamplingParams(...))`) is unchanged
+across that gap, and a 20-problem run reproduced end to end.
+
+`latex2sympy2` hard-pins `antlr4-python3-runtime==4.11.1`, which downgrades from
+the 4.13.2 that `math-verify` wants. We dropped `math-verify` -- their
+`grader.py` is what we grade with, so it was redundant.
+
+`PythonExecutor` opens a process pool sized to `cpu_count()`, and a second pool
+is created during `evaluate()`. On a 32-vCPU host this exceeds the default file
+descriptor limit. Run scripts must set `ulimit -n 65536`.
