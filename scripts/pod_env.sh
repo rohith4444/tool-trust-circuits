@@ -48,6 +48,12 @@ fi
 # so without -i it is never found.
 export GIT_SSH_COMMAND="ssh -i ~/.ssh/github -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new"
 
+# Commit authorship -- a different thing from the authentication above, and
+# stored in ~/.gitconfig, which lives on the container disk and so vanishes with
+# every new pod. Without it the first commit fails with "Author identity unknown".
+git config --global user.name "Rohith Reddy Mandala" 2>/dev/null
+git config --global user.email "rohithreddy24242@gmail.com" 2>/dev/null
+
 # --- huggingface token ------------------------------------------------------
 # Optional. Lives on the volume, never in git. Raises download rate limits and
 # is required to push traces to the private dataset repo.
