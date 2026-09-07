@@ -108,10 +108,25 @@ def main():
                     help="print raw judge responses -- the only way to check the "
                          "verdicts are reasoned rather than pattern-matched")
     ap.add_argument("--max-tokens", type=int, default=None,
-                    help="override both judges' limits. Qwen3 emits <think> "
-                         "blocks; if those eat the budget the verdict is "
-                         "truncated away and the case is silently lost.")
+                    help="override the judge's limit. ATTC passes raw prompts, "
+                         "so Qwen3 reasons at length before answering; at their "
+                         "1024/2048 caps 20-45%% of verdicts were truncated away.")
+    ap.add_argument("--judges", default="tool_ignore",
+                    help="comma-separated. Default is tool_ignore alone -- it "
+                         "produces the Tool-Ignored rate, the only judged number "
+                         "either contribution needs. trust_or_not reproduces "
+                         "ATTC's Figure 2, which we cite rather than re-derive.")
+    ap.add_argument("--no-thinking", action="store_true",
+                    help="wrap the prompt in Qwen3's chat template with "
+                         "enable_thinking=False, so it emits a verdict instead of "
+                         "reasoning to the token limit. Deviates from ATTC, who "
+                         "pass raw text -- validate agreement before relying on it.")
     args = ap.parse_args()
+
+    judges = {k: JUDGES[k] for k in
+              (j.strip() for j in args.judges.split(",")) if k in JUDGES}
+    if not judges:
+        sys.exit(f"unknown judge(s): {args.judges}. known: {list(JUDGES)}")
 
     from vllm import LLM, SamplingParams  # noqa: E402
 
@@ -122,8 +137,21 @@ def main():
     if not runs:
         sys.exit(f"no protocol runs (limit -1) under {root}")
 
-    print(f"{len(runs)} trace files, judges: {list(JUDGES)}")
+    mode = "chat template, thinking OFF" if args.no_thinking else "raw prompt (ATTC)"
+    print(f"{len(runs)} trace files, judges: {list(judges)}, mode: {mode}")
     print(f"loading {JUDGE_MODEL} (once, reused for every file)...\n")
+
+    tokenizer = None
+    if args.no_thinking:
+        from transformers import AutoTokenizer
+        tokenizer = AutoTokenizer.from_pretrained(JUDGE_MODEL)
+
+    def build(prompt_text):
+        if tokenizer is None:
+            return prompt_text
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": prompt_text}],
+            tokenize=False, add_generation_prompt=True, enable_thinking=False)
 
     gpus = os.environ.get("CUDA_VISIBLE_DEVICES", "0").split(",")
     llm = LLM(model=JUDGE_MODEL, tensor_parallel_size=len(gpus),
@@ -140,8 +168,8 @@ def main():
             print(f"{key}/{bench}: no false cases, skipping")
             continue
 
-        for jname, jcfg in JUDGES.items():
-            prompts = [jcfg["prompt"] + json.dumps(c, ensure_ascii=False, indent=2)
+        for jname, jcfg in judges.items():
+            prompts = [build(jcfg["prompt"] + json.dumps(c, ensure_ascii=False, indent=2))
                        for c in cases]
             outs = llm.generate(prompts, SamplingParams(
                 temperature=0.6, top_p=0.95, n=1,
@@ -162,7 +190,8 @@ def main():
                     invalid += 1
                 records.append({"idx": c["idx"], "type": verdict, "response": text})
 
-            out_path = label_dir / f"{key}_{bench}_{jname}.jsonl"
+            tag = "_nothink" if args.no_thinking else ""
+            out_path = label_dir / f"{key}_{bench}_{jname}{tag}.jsonl"
             with open(out_path, "w") as f:
                 for r in records:
                     f.write(json.dumps(r, ensure_ascii=False) + "\n")
