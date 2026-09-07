@@ -82,7 +82,11 @@ def summarise(path):
         if (not correct) and "```output" in code and "\\boxed{" in code:
             stat["eligible"] += 1
 
-    return {"n": n, **{k: v for k, v in stat.items()}}
+    # Name every key explicitly: stat is a defaultdict, so a counter that was
+    # never incremented (e.g. zero eligible traces in a file) would otherwise be
+    # absent and blow up the formatter.
+    keys = ("correct", "python", "output", "boxed", "exec_err", "eligible")
+    return {"n": n, **{k: stat[k] for k in keys}}
 
 
 def main():
