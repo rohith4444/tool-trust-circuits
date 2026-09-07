@@ -69,11 +69,21 @@ def prepare_data(data_name, args):
     examples = examples[args.start:len(examples) if args.end == -1 else args.end]
 
     # get out_file name
-    dt_string = datetime.now().strftime("%m-%d_%H-%M")
+    # MODIFIED: timestamp re-enabled (upstream computed dt_string but wrote a
+    # deterministic name, so re-running a config silently clobbered the previous
+    # result). Seconds added -- upstream's minute resolution still collides for
+    # two runs started in the same minute.
+    #
+    # Safe for resume: the prefix below stops before start/end/timestamp, and
+    # line ~82 collects processed samples via startswith(out_file_prefix), so
+    # timestamped files are still found and merged.
+    #
+    # Downstream tools must pick the MOST RECENT file per (model, benchmark,
+    # config) -- otherwise this just trades "which limit?" for "which timestamp?".
+    dt_string = datetime.now().strftime("%m-%d_%H-%M-%S")
     model_name = "/".join(args.model_name_or_path.split("/")[-2:])
     out_file_prefix = f'{args.split}_{args.prompt_type}_{args.num_test_sample}_seed{args.seed}_t{args.temperature}_p{args.top_p}'
-    # out_file = f'{args.output_dir}/{model_name}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}_{dt_string}.jsonl'
-    out_file = f'{args.output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}.jsonl'
+    out_file = f'{args.output_dir}/{data_name}/{out_file_prefix}_s{args.start}_e{args.end}_{dt_string}.jsonl'
     os.makedirs(f'{args.output_dir}/{data_name}', exist_ok=True)
 
     # load all processed samples

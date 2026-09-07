@@ -36,6 +36,30 @@ def first(v):
     return v[0] if isinstance(v, list) and v else v
 
 
+def latest_runs(root):
+    """One file per (model, benchmark, config) -- the most recent.
+
+    Filenames are test_{prompt}_{limit}_seed{n}_t{temp}_p{top_p}_s{start}_e{end}_{stamp}.jsonl
+    so the same directory accumulates validation runs (limit 20, 50) alongside
+    the full run (-1), and re-running a config adds another timestamp rather
+    than overwriting. Group by everything except the timestamp, keep the newest.
+    """
+    groups = {}
+    for f in root.glob("*_seed*/*/*.jsonl"):
+        model_dir, bench = f.parent.parent.name, f.parent.name
+        parts = f.stem.split("_")
+        # limit is the 3rd field: test_{prompt}_{limit}_...
+        limit = parts[2] if len(parts) > 2 else "?"
+        # strip a trailing MM-DD_HH-MM-SS stamp if present
+        stamp = ""
+        if len(parts) >= 2 and parts[-1].count("-") == 2 and parts[-2].count("-") == 1:
+            stamp, parts = f"{parts[-2]}_{parts[-1]}", parts[:-2]
+        key = (model_dir, bench, "_".join(parts))
+        if key not in groups or stamp > groups[key][0]:
+            groups[key] = (stamp, f, limit)
+    return sorted((m, b, lim, f) for (m, b, _), (_, f, lim) in groups.items())
+
+
 def summarise(path):
     rows = [json.loads(l) for l in open(path) if l.strip()]
     if not rows:
@@ -64,25 +88,29 @@ def summarise(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.environ.get("TIR_OUTPUTS", "/workspace/outputs"))
+    ap.add_argument("--full-only", action="store_true",
+                    help="only the protocol runs (num_test_sample = -1), "
+                         "excluding the 20/50-problem validation runs")
     args = ap.parse_args()
 
     root = Path(args.out)
     if not root.exists():
         sys.exit(f"no such directory: {root}")
 
-    found = sorted(root.glob("*_seed*/*/*.jsonl"))
+    found = latest_runs(root)
+    if args.full_only:
+        found = [r for r in found if r[2] == "-1"]
     if not found:
         sys.exit(f"no run files under {root} (expected <model>_seed<n>/<benchmark>/*.jsonl)")
 
-    hdr = (f"{'model':<11}{'benchmark':<15}{'n':>5}{'acc':>7}{'ATTC':>7}"
+    hdr = (f"{'model':<11}{'benchmark':<15}{'lim':>5}{'n':>5}{'acc':>7}{'ATTC':>7}"
            f"{'py':>6}{'out':>6}{'box':>6}{'err':>6}{'elig':>6}")
     print(hdr)
     print("-" * len(hdr))
 
     totals = defaultdict(lambda: defaultdict(int))
-    for f in found:
-        key = f.parent.parent.name.rsplit("_seed", 1)[0]
-        bench = f.parent.name
+    for model_dir, bench, limit, f in found:
+        key = model_dir.rsplit("_seed", 1)[0]
         s = summarise(f)
         if not s:
             continue
@@ -92,7 +120,7 @@ def main():
         attc = (MODELS.get(key, {}).get("attc_acc") or {}).get(bench)
         attc_s = f"{attc:.1f}" if attc is not None else "-"
 
-        print(f"{key:<11}{bench:<15}{n:>5}{acc:>6.1f}{'%':<1}{attc_s:>7}"
+        print(f"{key:<11}{bench:<15}{limit:>5}{n:>5}{acc:>6.1f}{'%':<1}{attc_s:>7}"
               f"{100*s['python']//n:>5}%{100*s['output']//n:>5}%"
               f"{100*s['boxed']//n:>5}%{100*s['exec_err']//n:>5}%"
               f"{s['eligible']:>6}")

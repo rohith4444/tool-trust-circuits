@@ -47,9 +47,10 @@ variants with different subsets and answer normalisation.
 
 ## Our modifications
 
-Three. The first two remove dead imports -- neither changes behaviour on any
+Four. The first two remove dead imports -- neither changes behaviour on any
 benchmark we evaluate, and together they mean `octotools` is never imported. The
-third adds an optional argument that defaults to upstream behaviour.
+third adds an optional argument that defaults to upstream behaviour; the fourth
+restores a timestamped filename they had written but disabled.
 
 ### 1. `grader.py` -- commented out the `ChatOpenAI` import and instantiation
 
@@ -100,6 +101,32 @@ A ~150x throughput gap on identical hardware. We cap SimpleTIR and DemyAgent at
 The argument defaults to `None`, in which case the `LLM(...)` call is upstream's
 verbatim. This is a throughput change only; it does not alter what the model
 sees, since no prompt approaches even 8k tokens.
+
+### 4. `math_eval.py` -- re-enabled the output-filename timestamp
+
+Upstream computes `dt_string` but writes a deterministic filename, having
+commented out the timestamped variant. The effect is that re-running a config
+(all our runs pass `--overwrite`) silently replaces the previous result, so a
+run that later turns out to be wrong cannot be compared against its replacement.
+
+We restored their timestamped line and widened the format from `%m-%d_%H-%M` to
+`%m-%d_%H-%M-%S`, since minute resolution still collides for two runs started in
+the same minute.
+
+```
+test_torl_-1_seed0_t0.0_p1_s0_e-1_09-07_04-15-32.jsonl
+```
+
+Safe for their resume logic: `out_file_prefix` stops before start/end/timestamp,
+and processed samples are collected via `startswith(out_file_prefix)`, so
+timestamped files are still found and merged.
+
+**This is the one modification that changes output rather than imports or
+throughput**, and it imposes a rule on everything downstream: tools must select
+the **most recent** file per (model, benchmark, config). Without that rule the
+timestamp merely trades "which limit?" for "which timestamp?" -- and a timestamp
+says nothing about which run is authoritative. `scripts/summarize_runs.py`
+implements this in `latest_runs()`.
 
 ## Runtime notes
 
