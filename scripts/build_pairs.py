@@ -60,24 +60,72 @@ def parse_number(s):
         return None
 
 
+def tool_answer(block):
+    """The value a tool output block actually reports.
+
+    Sandbox output is rarely a bare number. Models label their prints and print
+    several lines, so the block looks like:
+
+        'Valid colorings count: 22\\nTotal colorings: 256\\nm + n: 139'
+        'Total melting: 8 cm\\nNew length after 5:00 PM: 12 cm'
+        'Timeout Error'
+        'Done'                  <- code ran but printed nothing
+
+    Taking the block verbatim made almost every comparison against ground truth
+    fail, which pushed nearly all pairs into 'discovery' and left the validation
+    split at ~6% when the judge independently measures Tool-Ignored at 10-20%.
+
+    Strategy: whole block first (bare numbers), then the last line, then the
+    last number anywhere in it -- the answer is conventionally printed last.
+    """
+    block = (block or "").strip()
+    if not block or block in ("Done",) or "Error" in block or "Timeout" in block:
+        return None
+
+    if parse_number(block) is not None:
+        return block
+
+    last_line = block.splitlines()[-1].strip()
+    if parse_number(last_line) is not None:
+        return last_line
+    if ":" in last_line:
+        after = last_line.rsplit(":", 1)[1].strip()
+        # strip trailing units, e.g. "12 cm"
+        m = re.match(r"^(-?[\d,.]+)", after)
+        if m and parse_number(m.group(1)) is not None:
+            return m.group(1)
+
+    nums = re.findall(r"-?\d+(?:\.\d+)?", block)
+    return nums[-1] if nums else None
+
+
 def fabricate_Z(Y, X, variant):
-    """A plausible wrong tool output.
+    """A plausible wrong tool output: near Y, same magnitude.
 
     Must differ from Y (it is the wrong value) and from X (otherwise the
     corrupted run becomes "tool agrees with the model", a different condition).
-    Perturbs the leading digit so it diverges from Y at the first token --
-    Qwen splits numbers into single digits, so a leading-digit change is a
-    first-token change.
+
+    Perturbs the LAST digit, not the first. An earlier version changed the
+    leading digit "so Z diverges from Y at the first token" -- but Z never
+    appears in the ruler (Delta = logit(Y) - logit(X)), so its tokenisation is
+    irrelevant. That constraint bought nothing and cost realism: 113 -> 213 is
+    nearly double, and a model can dismiss it as absurd without any trust
+    arbitration. We would then be localising "detect an implausible number"
+    rather than "decide whether to believe the tool".
+
+    Near-miss keeps the contrast intact -- in the corrupted run the tool
+    endorses Z, so the model leans toward Z and logit(Y) falls regardless of
+    how close Z is.
     """
     s = str(Y)
-    m = re.search(r"\d", s)
-    if not m:
+    digits = [i for i, ch in enumerate(s) if ch.isdigit()]
+    if not digits:
         return None
-    i = m.start()
+    i = digits[-1]  # trailing digit: preserves order of magnitude
     d = int(s[i])
-    for shift in ((1, 2, 3) if variant == 0 else (2, 3, 1)):
-        nd = (d + shift) % 10
-        if nd == d:
+    for shift in ((1, -1, 2, -2, 3) if variant == 0 else (-1, 1, -2, 2, -3)):
+        nd = d + shift
+        if not (0 <= nd <= 9):
             continue
         cand = s[:i] + str(nd) + s[i + 1:]
         if cand != str(Y) and cand != str(X):
@@ -119,7 +167,9 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
 
             blocks = list(OUTPUT_BLOCK.finditer(code))
             if not blocks or "\\boxed{" not in code:
-                drops[key]["no_output_or_boxed"].append((d.get("idx"), X, Y, ""))
+                # Never eligible -- counted separately from genuine drops, which
+                # are traces that passed eligibility and then failed a check.
+                drops[key]["_not_eligible"].append((d.get("idx"), X, Y, ""))
                 continue
 
             div, prefix, tok_Y, tok_X = first_divergence(tok, X, Y)
@@ -148,15 +198,20 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
                 continue
 
             # The split: was the tool actually right? Deterministic, no judge.
-            tv = parse_number(tool_value)
+            # Compare the *extracted* answer, not the raw block -- see tool_answer().
+            answer = tool_answer(tool_value)
             yv = parse_number(Y)
-            if tv is not None and yv is not None:
-                tool_correct = abs(tv - yv) < 1e-6
+            if answer is None:
+                tool_correct = None          # error/no output: cannot tell
             else:
-                try:
-                    tool_correct = bool(math_equal(tool_value, Y))
-                except Exception:
-                    tool_correct = None
+                av = parse_number(answer)
+                if av is not None and yv is not None:
+                    tool_correct = abs(av - yv) < 1e-6
+                else:
+                    try:
+                        tool_correct = bool(math_equal(answer, Y))
+                    except Exception:
+                        tool_correct = None
 
             for vi, Z in enumerate(Zs):
                 pairs.append({
@@ -170,7 +225,8 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
                     # validation = real Tool-Ignored (tool was right, model wrong).
                     # unparseable tool output -> discovery, conservatively.
                     "split": "validation" if tool_correct else "discovery",
-                    "tool_value": tool_value, "tool_correct": tool_correct,
+                    "tool_value": tool_value, "tool_answer": answer,
+                    "tool_correct": tool_correct,
                     "single_block": len(blocks) == 1,
                     "numeric": parse_number(X) is not None and yv is not None,
                     "n_output_blocks": len(blocks),
@@ -190,7 +246,8 @@ def show(p):
     print(f"  X (model)  = {p['X']!r}")
     print(f"  Y (truth)  = {p['Y']!r}")
     print(f"  Z (fake)   = {p['Z']!r}")
-    print(f"  tool said  = {p['tool_value']!r}  -> correct={p['tool_correct']}")
+    print(f"  tool block = {p['tool_value']!r}")
+    print(f"  tool answer= {p['tool_answer']!r}  -> correct={p['tool_correct']}")
     r = p["readout"]
     print(f"  Delta = logit(tok {r['tok_Y']}) - logit(tok {r['tok_X']}) "
           f"at divergence index {r['divergence_index']}, "
@@ -253,9 +310,12 @@ def main():
             f"idx{i}{'+' if i == 3 else ''}={tags[f'div_{i}']}" for i in range(4)))
 
         d = drops[key]
-        if d:
-            print(f"  DROPPED: " + "  ".join(f"{k}={len(v)}" for k, v in d.items()))
-            for reason, items in d.items():
+        real = {k: v for k, v in d.items() if not k.startswith("_")}
+        print(f"  scanned past (never eligible): {len(d.get('_not_eligible', []))}")
+        if real:
+            print(f"  DROPPED after eligibility: "
+                  + "  ".join(f"{k}={len(v)}" for k, v in real.items()))
+            for reason, items in real.items():
                 for idx, X, Y, extra in items[:3]:
                     print(f"    [{reason}] idx={idx} X={X!r} Y={Y!r} {extra[:80]!r}")
 
