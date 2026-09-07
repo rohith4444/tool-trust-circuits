@@ -58,5 +58,7 @@ echo "HF_HOME      = $HF_HOME"
 echo "UV_CACHE_DIR = $UV_CACHE_DIR"
 echo "TIR_OUTPUTS  = $TIR_OUTPUTS"
 echo "VENV_GEN     = $VENV_GEN"
-echo "HF_TOKEN     = ${HF_TOKEN:+set}${HF_TOKEN:-not set}"
+# Never interpolate $HF_TOKEN itself here -- ${HF_TOKEN:-not set} expands to the
+# token value when it is set, which prints the secret to the terminal.
+echo "HF_TOKEN     = $([ -n "$HF_TOKEN" ] && echo ok || echo missing)"
 echo "git ssh key  = $([ -f ~/.ssh/github ] && echo ok || echo MISSING)"

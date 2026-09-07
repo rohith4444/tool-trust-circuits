@@ -42,6 +42,13 @@ def parse_args():
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument("--use_safetensors", action="store_true")
     parser.add_argument("--max_func_call", default=4, type=int)
+    # ADDED (not in upstream ATTC): cap the context vLLM initialises with.
+    # Upstream never sets this, so vLLM uses each model's config default -- 262144
+    # for DemyAgent, 131072 for SimpleTIR. vLLM sizes its KV cache to that, which
+    # collapses batching: 1.79 concurrent requests for DemyAgent against 262 for
+    # ToRL (whose config declares 4096). Purely a throughput knob; None keeps
+    # upstream behaviour.
+    parser.add_argument("--max_model_len", default=None, type=int)
     args = parser.parse_args()
     args.top_p = 1 if args.temperature == 0 else args.top_p # top_p must be 1 when using greedy sampling (vllm)
     return args
@@ -90,7 +97,11 @@ def setup(args):
     # load model
     available_gpus = os.environ['CUDA_VISIBLE_DEVICES'].split(',')
     if args.use_vllm:
-        llm = LLM(model=args.model_name_or_path, tensor_parallel_size=len(available_gpus), trust_remote_code=True)
+        # max_model_len added by us; when None this is upstream's call verbatim.
+        llm_kwargs = {}
+        if args.max_model_len is not None:
+            llm_kwargs["max_model_len"] = args.max_model_len
+        llm = LLM(model=args.model_name_or_path, tensor_parallel_size=len(available_gpus), trust_remote_code=True, **llm_kwargs)
         tokenizer = None
     else:
         llm, tokenizer =  load_hf_lm_and_tokenizer(

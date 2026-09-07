@@ -83,7 +83,8 @@ MODELS = {
         # phase -- generating them now would delay DemyAgent for no gain.
         "seeds": [0],
         "seeds_for_rates": [0, 1, 2],
-        "max_model_len": 8192,
+        # config declares 131072; capping restores ~8x batching throughput
+        "max_model_len": 16384,
         "role": "universality (within-family) + second intervention model",
         "attc_acc": {"math500": 82.1, "minerva_math": 30.1, "olympiadbench": 47.4,
                      "aime24": 46.7, "amc23": 75.0, "avg": 56.3},
@@ -99,8 +100,11 @@ MODELS = {
         "top_p": 0.6,
         "n_sampling": 1,
         "seeds": [0],
-        # config.json claims 262144; capped so the KV cache is a sane size
-        "max_model_len": 8192,
+        # config.json declares 262144. vLLM sizes its KV cache to whatever is
+        # declared, which collapsed batching to 1.79 concurrent requests against
+        # ToRL's 262. 16384 leaves headroom for 3072 tokens x 4 rounds plus the
+        # prompt (~13.5k worst case) while restoring ~16x throughput.
+        "max_model_len": 16384,
         "role": "universality (cross-family) -- the load-bearing evidence",
         "attc_acc": {"math500": 71.4, "minerva_math": 17.3, "olympiadbench": 51.9,
                      "aime24": 40.0, "amc23": 75.0, "avg": 51.1},

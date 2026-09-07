@@ -47,8 +47,9 @@ variants with different subsets and answer normalisation.
 
 ## Our modifications
 
-Two, both removing dead imports. Neither changes behaviour on any benchmark we
-evaluate, and together they mean `octotools` is never imported.
+Three. The first two remove dead imports -- neither changes behaviour on any
+benchmark we evaluate, and together they mean `octotools` is never imported. The
+third adds an optional argument that defaults to upstream behaviour.
 
 ### 1. `grader.py` -- commented out the `ChatOpenAI` import and instantiation
 
@@ -78,6 +79,27 @@ elif "search-r1" in args.prompt_type or "octo-sci" in args.prompt_type:
 types. Ours are `torl`, `simpleTIR`, and `DemyAgent`, which take the
 `PythonExecutor` branch. Moving the import to the call site preserves search TIR
 for anyone who wants it while keeping `octotools` off our import path.
+
+### 3. `math_eval.py` -- added an optional `--max_model_len`
+
+Upstream never sets this, so vLLM initialises with whatever each model's config
+declares. That is 4096 for ToRL, but **131072 for SimpleTIR and 262144 for
+DemyAgent** -- and vLLM sizes its KV cache to the declared context, which
+collapses batching:
+
+| model | declared context | max concurrency |
+|---|---|---|
+| ToRL | 4,096 | 262.00x |
+| SimpleTIR | 131,072 | 8.18x |
+| DemyAgent | 262,144 | 1.79x |
+
+A ~150x throughput gap on identical hardware. We cap SimpleTIR and DemyAgent at
+16,384, which leaves headroom for `max_tokens_per_call` (3072) x `max_func_call`
+(4) plus the prompt -- roughly 13.5k worst case.
+
+The argument defaults to `None`, in which case the `LLM(...)` call is upstream's
+verbatim. This is a throughput change only; it does not alter what the model
+sees, since no prompt approaches even 8k tokens.
 
 ## Runtime notes
 

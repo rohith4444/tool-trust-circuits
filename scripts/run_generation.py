@@ -66,9 +66,14 @@ def raise_fd_limit():
     return resource.getrlimit(resource.RLIMIT_NOFILE)[0]
 
 
-def run(key, benchmarks, limit, seed, gpu, out_root, dry_run):
+def run(key, benchmarks, limit, seed, gpu, out_root, dry_run, temperature=None):
     cfg = MODELS[key]
-    out_dir = Path(out_root) / f"{key}_seed{seed}"
+    # Diagnostics only. Overriding temperature breaks parity with ATTC Table 4,
+    # so runs that use it go to a separate directory and must never be mistaken
+    # for protocol runs.
+    temp = cfg["temperature"] if temperature is None else temperature
+    suffix = f"_seed{seed}" if temperature is None else f"_seed{seed}_TEMP{temp}_DIAG"
+    out_dir = Path(out_root) / f"{key}{suffix}"
 
     cmd = [
         sys.executable, "-u", str(REPO / "generation" / "math_eval.py"),
@@ -80,7 +85,7 @@ def run(key, benchmarks, limit, seed, gpu, out_root, dry_run):
         "--prompt_type", cfg["prompt_type"],
         "--num_test_sample", str(limit),
         "--seed", str(seed),
-        "--temperature", str(cfg["temperature"]),
+        "--temperature", str(temp),
         "--n_sampling", str(cfg["n_sampling"]),
         "--top_p", str(cfg["top_p"]),
         "--start", "0", "--end", "-1",
@@ -88,6 +93,7 @@ def run(key, benchmarks, limit, seed, gpu, out_root, dry_run):
         "--max_tokens_per_call", str(MAX_TOKENS_PER_CALL),
         "--use_vllm",
         "--max_func_call", str(MAX_FUNC_CALL),
+        "--max_model_len", str(cfg["max_model_len"]),
         "--overwrite",
     ]
 
@@ -101,7 +107,10 @@ def run(key, benchmarks, limit, seed, gpu, out_root, dry_run):
     print(f"\n{'=' * 72}")
     print(f"{key}  seed={seed}  gpu={gpu}")
     print(f"  {cfg['repo']}  prompt_type={cfg['prompt_type']}")
-    print(f"  temp={cfg['temperature']} top_p={cfg['top_p']} n={cfg['n_sampling']}")
+    if temperature is not None:
+        print(f"  *** DIAGNOSTIC: temperature overridden {cfg['temperature']} -> {temp} ***")
+    print(f"  temp={temp} top_p={cfg['top_p']} n={cfg['n_sampling']} "
+          f"max_model_len={cfg['max_model_len']}")
     print(f"  benchmarks: {','.join(benchmarks)}   limit={limit}")
     print(f"  -> {out_dir}")
     print(f"{'=' * 72}\n")
@@ -125,6 +134,10 @@ def main():
     ap.add_argument("--for-rates", action="store_true",
                     help="also run the extra seeds needed for stable reported "
                          "rates on temperature>0 models (intervention phase only)")
+    ap.add_argument("--temperature", type=float, default=None,
+                    help="DIAGNOSTIC ONLY -- overrides the registry, breaking "
+                         "parity with ATTC Table 4. Output goes to a _DIAG "
+                         "directory so it can never be confused with a protocol run.")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -149,7 +162,8 @@ def main():
         seeds = cfg.get("seeds_for_rates", cfg["seeds"]) if args.for_rates else cfg["seeds"]
         for seed in seeds:
             for bs, n in batches:
-                rc = run(key, bs, n, seed, args.gpu, args.out, args.dry_run)
+                rc = run(key, bs, n, seed, args.gpu, args.out, args.dry_run,
+                         temperature=args.temperature)
                 if rc != 0:
                     failures.append(f"{key}/seed{seed}/{','.join(bs)} (exit {rc})")
 
