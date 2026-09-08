@@ -7,12 +7,20 @@ __pycache__/
 .venv*/
 uv.lock
 
-# Generated data -- lives on the RunPod volume and a private HF dataset repo,
-# never in git. See docs/ for the storage plan.
+# Generated traces -- live on the RunPod volume and a private HF dataset repo,
+# never in git.
 outputs/
 data/raw/
 *.jsonl
 *.jsonl.gz
+
+# ...but data/ holds ATTC's released benchmark files, which we DO commit (8.6 MB)
+# so the repo reproduces standalone. We use their files rather than fetching from
+# source because the reproduction gate has to score the same records they scored --
+# these benchmarks have several public variants with different subsets and answer
+# normalisation.
+!data/**/*.jsonl
+!data/**/*.json
 
 # Model weights -- pulled from HF to the volume cache, never stored here
 hf_cache/

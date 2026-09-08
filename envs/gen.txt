@@ -1,0 +1,47 @@
+# "gen" environment -- trace generation. CUDA only, will not install on macOS.
+#
+# Top-level intent only, no exact pins. The versions that actually resolved are
+# frozen into envs/gen.lock.txt after installing: read this file to understand
+# what we need, install from the lock file to reproduce.
+#
+#   export HF_HOME=/workspace/hf_cache      # BEFORE installing or downloading --
+#   export UV_CACHE_DIR=/workspace/uv_cache # defaults land on the 40 GB container
+#                                           # disk and are wiped when the pod stops
+#
+#   uv venv /root/venv-gen                  # container disk: local and fast.
+#                                           # /workspace is network storage, and a
+#                                           # venv is ~30k small files.
+#   uv pip install --python /root/venv-gen -r envs/gen.txt
+#   uv pip freeze --python /root/venv-gen > envs/gen.lock.txt
+
+# Generation. Pulls its own torch -- likely a cu12 build, which runs fine on the
+# pod's CUDA 13 driver, since drivers are backward compatible.
+vllm
+
+# Models, tokenizers, benchmark loading
+transformers
+huggingface-hub
+datasets
+
+# Required by the vendored ATTC harness in generation/.
+#
+# latex2sympy2 hard-pins antlr4-python3-runtime==4.11.1, which downgrades the
+# 4.13.2 that math-verify wanted. We dropped math-verify rather than fight it:
+# generation/grader.py is what we grade with, so it was redundant -- and using
+# their grader is what keeps the reproduction gate honest.
+latex2sympy2
+word2number
+Pebble
+timeout-decorator
+platformdirs
+
+# NOT for our code -- for the code the *model* writes. The sandbox executes
+# generated Python, and nearly every TIR trace opens with "import sympy as sp".
+# These must be importable by the subprocess that runs it, or the tool call
+# fails and the trace is wasted. matplotlib was added after a 20-problem run
+# lost two traces to ModuleNotFoundError; watch the logs for others.
+sympy
+numpy
+scipy
+matplotlib
+pandas
