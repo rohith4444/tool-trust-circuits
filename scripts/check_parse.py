@@ -108,9 +108,18 @@ def main():
             if not X:
                 c["pred_empty"] += 1
 
+            # Mechanism 1: extract_answer checks '<answer>' (parser.py:238)
+            # BEFORE 'boxed' (line 240), and extract_solution returns the FIRST
+            # tag, so an early draft wins over the model's final answer.
+            has_tag = "<answer>" in code
+            c["answer_tag"] += has_tag
+
             boxed = last_boxed(code)
             if boxed is None:
-                c["no_boxed"] += 1
+                # Mechanism 2: generation stopped mid-answer, so the brace
+                # never closed. Nothing in the text to recover -- a parser fix
+                # cannot help these, only regeneration can.
+                c["boxed_unclosed" if "\\boxed{" in code else "no_boxed"] += 1
                 continue
             boxed = boxed.strip()
 
@@ -119,6 +128,7 @@ def main():
             mis = same(boxed, Y, math_equal)
             if mis:
                 c["parse_failure"] += 1
+                c["pf_answer_tag"] += has_tag
 
             # Same eligibility gate build_pairs.py applies, so the validation
             # contamination number below is about traces that really would have
@@ -142,11 +152,17 @@ def main():
             continue
         w, tr = c["wrong"], c["tool_right"] or 1
         print(f"\n{'=' * 74}\n{key}\n{'=' * 74}")
+        pf = c["parse_failure"] or 1
         print(f"  {w} traces scored wrong")
         print(f"    pred empty          {c['pred_empty']:>5}  ({100*c['pred_empty']/w:>5.1f}%)")
-        print(f"    no \\boxed in trace  {c['no_boxed']:>5}  ({100*c['no_boxed']/w:>5.1f}%)")
+        print(f"    no \\boxed at all    {c['no_boxed']:>5}  ({100*c['no_boxed']/w:>5.1f}%)")
+        print(f"    \\boxed{{ unclosed    {c['boxed_unclosed']:>5}  "
+              f"({100*c['boxed_unclosed']/w:>5.1f}%)   TRUNCATED, only regeneration helps")
+        print(f"    has <answer> tag    {c['answer_tag']:>5}  ({100*c['answer_tag']/w:>5.1f}%)")
         print(f"    PARSE FAILURE       {c['parse_failure']:>5}  ({100*c['parse_failure']/w:>5.1f}%)"
               f"   last \\boxed == gt, but scored wrong")
+        print(f"      of those, tagged  {c['pf_answer_tag']:>5}  ({100*c['pf_answer_tag']/pf:>5.1f}%)"
+              f"   <answer> beat boxed -- fixable offline")
         print(f"\n  {c['tool_right']} of {c['eligible']} eligible are tool_right (validation)")
         print(f"    of those, bogus     {c['tool_right_bogus']:>5}  "
               f"({100*c['tool_right_bogus']/tr:>5.1f}%)   model was right all along")
