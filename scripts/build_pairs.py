@@ -27,7 +27,6 @@ correct answer the ruler collapses to logit(Y) - logit(Y).
 import argparse
 import json
 import os
-import random
 import re
 import sys
 from collections import Counter, defaultdict
@@ -99,11 +98,67 @@ def tool_answer(block):
     return nums[-1] if nums else None
 
 
-def fabricate_Z(Y, X, variant):
-    """A plausible wrong tool output: near Y, same magnitude.
+def same(a, b, math_equal):
+    """Numeric first, symbolic fallback -- the ladder grader.py uses."""
+    av, bv = parse_number(a), parse_number(b)
+    if av is not None and bv is not None:
+        return abs(av - bv) < 1e-6
+    try:
+        return bool(math_equal(a, b))
+    except Exception:
+        return False
 
-    Must differ from Y (it is the wrong value) and from X (otherwise the
-    corrupted run becomes "tool agrees with the model", a different condition).
+
+def classify_tool(answer, X, Y, math_equal):
+    """What relationship did the tool have to the model and the truth?
+
+    Four outcomes, and only the first is Tool-Ignored:
+
+      tool_right   tool == Y   tool was right, model was wrong. The model saw
+                               the correct value and overrode it. This is the
+                               phenomenon; these become the validation split.
+      tool_echoed  tool == X   the model reported what the tool said. Both are
+                               wrong because the CODE was wrong -- no trust
+                               arbitration happened at all.
+      tool_other   neither     the tool said something else and the model
+                               overrode it. A real conflict; the tool merely
+                               happened to be wrong too.
+      no_answer                "Done", "Timeout Error", nothing parseable.
+
+    Y is tested before X so a trace can never fall in two cases. Before this
+    existed the code compared against Y only, which collapsed the middle two
+    into one undifferentiated "discovery" bucket -- 'the model followed a wrong
+    tool' and 'the model overrode a wrong tool' are opposite behaviours, and
+    lumping them hid how much of the corpus contains no conflict whatsoever.
+    """
+    if answer is None:
+        return "no_answer"
+    if same(answer, Y, math_equal):
+        return "tool_right"
+    if same(answer, X, math_equal):
+        return "tool_echoed"
+    return "tool_other"
+
+
+def is_same_number(a, b):
+    """Numeric equality when both parse, string equality otherwise.
+
+    Guards Z against colliding with X. A plain string compare misses
+    X="113.0" vs cand="113": different text, same value, and the corrupted run
+    would silently become "tool agrees with the model" -- a different
+    experimental condition wearing the label of this one.
+    """
+    av, bv = parse_number(a), parse_number(b)
+    if av is not None and bv is not None:
+        return abs(av - bv) < 1e-6
+    return str(a) == str(b)
+
+
+def fabricate_Zs(Y, X, n=Z_VARIANTS):
+    """Up to n DISTINCT plausible wrong tool outputs: near Y, same magnitude.
+
+    Each must differ from Y (it is the wrong value), from X (see
+    is_same_number), and from the others.
 
     Perturbs the LAST digit, not the first. An earlier version changed the
     leading digit "so Z diverges from Y at the first token" -- but Z never
@@ -116,35 +171,59 @@ def fabricate_Z(Y, X, variant):
     Near-miss keeps the contrast intact -- in the corrupted run the tool
     endorses Z, so the model leans toward Z and logit(Y) falls regardless of
     how close Z is.
+
+    The single shared ladder replaces two per-variant ladders that ran in
+    opposite directions. Those collided whenever Y's last digit was 0 or 9 --
+    one direction left the 0-9 range, so both variants fell through to the same
+    shift and emitted byte-identical pairs under different ids. That is ~20% of
+    answers, silently double-weighting those traces in any average.
+
+    Editing the last digit rather than incrementing arithmetically keeps the
+    change local to the string, so it works on answers that are not plain
+    integers: 1.25 -> 1.26 (last decimal place), \\frac{1}{2n+2} ->
+    \\frac{1}{2n+3}, 6+9i -> 6+8i. Answers with no digit at all (\\pi, x) yield
+    nothing and the trace is dropped.
     """
     s = str(Y)
     digits = [i for i, ch in enumerate(s) if ch.isdigit()]
     if not digits:
-        return None
+        return []
     i = digits[-1]  # trailing digit: preserves order of magnitude
     d = int(s[i])
-    for shift in ((1, -1, 2, -2, 3) if variant == 0 else (-1, 1, -2, 2, -3)):
+    out = []
+    # Interleaved so the first two are Y+1 and Y-1 in the ordinary case.
+    for shift in (1, -1, 2, -2, 3, -3):
         nd = d + shift
         if not (0 <= nd <= 9):
             continue
         cand = s[:i] + str(nd) + s[i + 1:]
-        if cand != str(Y) and cand != str(X):
-            return cand
-    return None
+        if cand == s or cand in out or is_same_number(cand, X):
+            continue
+        out.append(cand)
+        if len(out) == n:
+            break
+    return out
 
 
 def first_divergence(tok, X, Y):
     """Where the two answers first differ in token space -- the Delta readout.
 
-    Returns (index, forced_prefix). Any shared prefix is appended to the probe,
-    identically in both runs, so the pair stays matched.
+    Returns (index, forced_prefix_text, tok_Y, tok_X, forced_prefix_ids). Any
+    shared prefix is appended to the probe, identically in both runs, so the
+    pair stays matched.
+
+    The ids come back alongside the text because the text is decoded here and
+    re-encoded as part of the full prompt, and that round trip is not
+    guaranteed to preserve token boundaries -- the tokeniser can merge the
+    prefix with the preceding "\\boxed{". The caller checks the ids survived.
     """
     tx = tok.encode(str(X), add_special_tokens=False)
     ty = tok.encode(str(Y), add_special_tokens=False)
     for i in range(min(len(tx), len(ty))):
         if tx[i] != ty[i]:
-            return i, tok.decode(ty[:i]), ty[i], tx[i]
-    return None, None, None, None  # one is a token-prefix of the other
+            return i, tok.decode(ty[:i]), ty[i], tx[i], list(ty[:i])
+    # One is a token-prefix of the other: no position reads them apart.
+    return None, None, None, None, None
 
 
 def build_for_model(key, runs, tok, limit, drops, math_equal):
@@ -172,12 +251,12 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
                 drops[key]["_not_eligible"].append((d.get("idx"), X, Y, ""))
                 continue
 
-            div, prefix, tok_Y, tok_X = first_divergence(tok, X, Y)
+            div, prefix, tok_Y, tok_X, prefix_ids = first_divergence(tok, X, Y)
             if div is None:
                 drops[key]["divergence_none"].append((d.get("idx"), X, Y, code[-200:]))
                 continue
 
-            Zs = [z for z in (fabricate_Z(Y, X, v) for v in range(Z_VARIANTS)) if z]
+            Zs = fabricate_Zs(Y, X)
             if not Zs:
                 drops[key]["no_digit_in_Y"].append((d.get("idx"), X, Y, ""))
                 continue
@@ -192,26 +271,30 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
             def text_with(v):
                 return f"{head}```output\n{v}\n```\n{PROBE}{prefix}"
 
-            n_tok = len(tok.encode(text_with(Y), add_special_tokens=False))
+            ids = tok.encode(text_with(Y), add_special_tokens=False)
+            n_tok = len(ids)
             if n_tok > cfg["max_model_len"] - 32:
                 drops[key]["too_long"].append((d.get("idx"), X, Y, f"{n_tok} tokens"))
+                continue
+
+            # The prompt must end in exactly the tokens we mean to teacher-force,
+            # or Delta is read at the wrong position. prefix was decoded from Y's
+            # ids and re-encoded here as part of a longer string, and that round
+            # trip can merge it with the preceding "\boxed{". A no-op when
+            # div == 0 (empty prefix), which is the common case. Checking the
+            # clean text covers both runs: Z is the same character length as Y,
+            # so everything after the output block tokenises identically.
+            if div > 0 and ids[-div:] != prefix_ids:
+                drops[key]["prefix_retokenised"].append(
+                    (d.get("idx"), X, Y, f"div={div} prefix={prefix!r}"))
                 continue
 
             # The split: was the tool actually right? Deterministic, no judge.
             # Compare the *extracted* answer, not the raw block -- see tool_answer().
             answer = tool_answer(tool_value)
             yv = parse_number(Y)
-            if answer is None:
-                tool_correct = None          # error/no output: cannot tell
-            else:
-                av = parse_number(answer)
-                if av is not None and yv is not None:
-                    tool_correct = abs(av - yv) < 1e-6
-                else:
-                    try:
-                        tool_correct = bool(math_equal(answer, Y))
-                    except Exception:
-                        tool_correct = None
+            case = classify_tool(answer, X, Y, math_equal)
+            tool_correct = None if case == "no_answer" else (case == "tool_right")
 
             for vi, Z in enumerate(Zs):
                 pairs.append({
@@ -227,6 +310,13 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
                     "split": "validation" if tool_correct else "discovery",
                     "tool_value": tool_value, "tool_answer": answer,
                     "tool_correct": tool_correct,
+                    # tool_right / tool_echoed / tool_other / no_answer. The
+                    # split only distinguishes the first from the rest; this
+                    # keeps the distinction the split throws away, so analysis
+                    # can ask whether the circuit behaves differently on traces
+                    # that contained a real conflict (tool_right, tool_other)
+                    # than on ones where nothing was arbitrated (tool_echoed).
+                    "tool_case": case,
                     "single_block": len(blocks) == 1,
                     "numeric": parse_number(X) is not None and yv is not None,
                     "n_output_blocks": len(blocks),
@@ -271,10 +361,10 @@ def main():
     ap.add_argument("--limit", type=int, default=0, help="traces per file; 0 = all")
     ap.add_argument("--dry-run", action="store_true",
                     help="print pairs in full, write nothing")
-    ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
-    random.seed(args.seed)
+    # No --seed: Z generation is a deterministic function of (Y, X), and the
+    # trace order is fixed by the input files. Nothing here samples.
     from transformers import AutoTokenizer
     from grader import math_equal
 
@@ -297,14 +387,29 @@ def main():
     for key, pairs in by_model.items():
         splits = Counter(p["split"] for p in pairs)
         tags = Counter()
+        # Cases are a property of the trace, not the pair -- both Z-variants of
+        # a trace share one. Count unique traces so the breakdown is not
+        # silently doubled. (Not len(pairs)//Z_VARIANTS: fabricate_Zs returns
+        # "up to" n, so a trace can contribute fewer.)
+        cases, seen = Counter(), set()
         for p in pairs:
             tags["single_block"] += p["single_block"]
             tags["numeric"] += p["numeric"]
             tags[f"div_{min(p['readout']['divergence_index'], 3)}"] += 1
+            k = (p["benchmark"], p["idx"])
+            if k not in seen:
+                seen.add(k)
+                cases[p["tool_case"]] += 1
 
-        print(f"\n{'=' * 72}\n{key}: {len(pairs)} pairs "
-              f"({len(pairs)//Z_VARIANTS} traces x {Z_VARIANTS} Z-variants)")
+        n_tr = len(seen) or 1
+        print(f"\n{'=' * 72}\n{key}: {len(pairs)} pairs from {len(seen)} traces")
         print(f"  discovery={splits['discovery']}  validation={splits['validation']}")
+        print("  tool vs model/truth, per trace:")
+        for name in ("tool_right", "tool_echoed", "tool_other", "no_answer"):
+            print(f"    {name:<12}{cases[name]:>5}  ({100*cases[name]/n_tr:>5.1f}%)")
+        conflict = cases["tool_right"] + cases["tool_other"]
+        print(f"    real conflict (right+other): {conflict} "
+              f"({100*conflict/n_tr:.1f}%)")
         print(f"  single_block={tags['single_block']}  numeric={tags['numeric']}")
         print(f"  divergence: " + "  ".join(
             f"idx{i}{'+' if i == 3 else ''}={tags[f'div_{i}']}" for i in range(4)))
