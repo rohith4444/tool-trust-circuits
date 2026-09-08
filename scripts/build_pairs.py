@@ -26,6 +26,7 @@ correct answer the ruler collapses to logit(Y) - logit(Y).
 
 import argparse
 import json
+import math
 import os
 import re
 import sys
@@ -98,11 +99,42 @@ def tool_answer(block):
     return nums[-1] if nums else None
 
 
+def last_boxed(text):
+    """Contents of the final \\boxed{...}, matching braces rather than regex.
+
+    Returns None when the brace never closes, which means generation stopped
+    mid-answer. A regex stopping at the first '}' would instead truncate
+    \\boxed{\\frac{1}{2}} to '\\frac{1' and call a complete answer broken.
+    """
+    i = text.rfind("\\boxed{")
+    if i < 0:
+        return None
+    j, depth, out = i + len("\\boxed{"), 1, []
+    while j < len(text):
+        ch = text[j]
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(out)
+        out.append(ch)
+        j += 1
+    return None  # unclosed: the trace was cut off
+
+
 def same(a, b, math_equal):
-    """Numeric first, symbolic fallback -- the ladder grader.py uses."""
+    """Numeric first, symbolic fallback -- the ladder grader.py uses.
+
+    Tolerance is RELATIVE. An absolute 1e-6 made every pair of tiny numbers
+    equal: gt='1.325e-27' against a model answer of '0.000' compared True, so a
+    trace where the model was flatly wrong was recorded as one where it agreed
+    with the tool. isclose with abs_tol=0 scales the tolerance to the operands,
+    which is what "these are the same answer" should mean.
+    """
     av, bv = parse_number(a), parse_number(b)
     if av is not None and bv is not None:
-        return abs(av - bv) < 1e-6
+        return math.isclose(av, bv, rel_tol=1e-9, abs_tol=0.0)
     try:
         return bool(math_equal(a, b))
     except Exception:
@@ -249,6 +281,17 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
                 # Never eligible -- counted separately from genuine drops, which
                 # are traces that passed eligibility and then failed a check.
                 drops[key]["_not_eligible"].append((d.get("idx"), X, Y, ""))
+                continue
+
+            # Generation stopped mid-answer: "\boxed{" is present so the trace
+            # passes the substring eligibility test, but the brace never closes.
+            # extract_answer walks those braces too, so pred is a fragment --
+            # '2' where the model was writing '22'. X feeds the ruler, so a
+            # fragment there makes Delta meaningless whichever split the pair
+            # lands in. 104 DemyAgent traces, ~0 for the other two.
+            if last_boxed(code) is None:
+                drops[key]["boxed_unclosed"].append(
+                    (d.get("idx"), X, Y, code[-80:]))
                 continue
 
             div, prefix, tok_Y, tok_X, prefix_ids = first_divergence(tok, X, Y)

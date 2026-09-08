@@ -43,31 +43,8 @@ sys.path.insert(0, str(REPO / "generation"))
 from configs.models import MODELS  # noqa: E402
 from scripts.summarize_runs import latest_runs  # noqa: E402
 from scripts.build_pairs import (  # noqa: E402
-    OUTPUT_BLOCK, classify_tool, same, tool_answer,
+    OUTPUT_BLOCK, classify_tool, last_boxed, same, tool_answer,
 )
-
-
-def last_boxed(text):
-    """Contents of the final \\boxed{...}, matching braces rather than regex.
-
-    A regex stopping at the first '}' truncates \\boxed{\\frac{1}{2}} to
-    '\\frac{1', which would look like a parse failure of our own making.
-    """
-    i = text.rfind("\\boxed{")
-    if i < 0:
-        return None
-    j, depth, out = i + len("\\boxed{"), 1, []
-    while j < len(text):
-        ch = text[j]
-        if ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return "".join(out)
-        out.append(ch)
-        j += 1
-    return None  # unclosed
 
 
 def main():

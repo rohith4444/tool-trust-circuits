@@ -29,7 +29,9 @@ sys.path.insert(0, str(REPO / "generation"))
 
 from configs.models import MODELS  # noqa: E402
 from scripts.summarize_runs import latest_runs  # noqa: E402
-from scripts.build_pairs import OUTPUT_BLOCK, classify_tool, tool_answer  # noqa: E402
+from scripts.build_pairs import (  # noqa: E402
+    OUTPUT_BLOCK, classify_tool, last_boxed, tool_answer,
+)
 
 CASES = [
     ("tool_right", "tool == Y     TOOL-IGNORED -> validation"),
@@ -88,6 +90,16 @@ def main():
             if not blocks or "\\boxed{" not in code:
                 continue
 
+            # Same exclusion build_pairs.py makes: an unclosed brace means the
+            # trace was cut off mid-answer, so pred is a fragment and every
+            # comparison below is against a value the model never finished
+            # writing. Counting these was what made DemyAgent look like it
+            # ignored a correct tool 39.7% of the time.
+            if last_boxed(code) is None:
+                for c in counters:
+                    c["truncated"] += 1
+                continue
+
             # The same last-block choice build_pairs.py makes.
             case = classify_tool(tool_answer(blocks[-1].strip()), X, Y, math_equal)
             for c in counters:
@@ -101,7 +113,8 @@ def main():
             continue
         print(f"\n{'=' * 78}\n{key}\n{'=' * 78}")
         print(f"  {c['total']} traces -> {c['wrong']} wrong -> {c['eligible']} eligible"
-              f"   ({c['multi_block']} with >1 output block)")
+              f"   ({c['multi_block']} with >1 output block,"
+              f" {c['truncated']} excluded as truncated)")
         print()
         table(c)
         conflict = c["tool_right"] + c["tool_other"]
