@@ -30,7 +30,7 @@ sys.path.insert(0, str(REPO / "generation"))
 from configs.models import MODELS  # noqa: E402
 from scripts.summarize_runs import latest_runs  # noqa: E402
 from scripts.build_pairs import (  # noqa: E402
-    OUTPUT_BLOCK, classify_tool, last_boxed, tool_answer,
+    OUTPUT_BLOCK, classify_tool, last_boxed, same, tool_answer,
 )
 
 CASES = [
@@ -95,9 +95,17 @@ def main():
             # comparison below is against a value the model never finished
             # writing. Counting these was what made DemyAgent look like it
             # ignored a correct tool 39.7% of the time.
-            if last_boxed(code) is None:
+            boxed = last_boxed(code)
+            if boxed is None:
                 for c in counters:
                     c["truncated"] += 1
+                continue
+
+            # Also build_pairs.py's gate: the trace's own final answer is the
+            # ground truth, so the model was right and only the parse was wrong.
+            if same(boxed, Y, math_equal):
+                for c in counters:
+                    c["actually_correct"] += 1
                 continue
 
             # The same last-block choice build_pairs.py makes.
@@ -113,8 +121,8 @@ def main():
             continue
         print(f"\n{'=' * 78}\n{key}\n{'=' * 78}")
         print(f"  {c['total']} traces -> {c['wrong']} wrong -> {c['eligible']} eligible"
-              f"   ({c['multi_block']} with >1 output block,"
-              f" {c['truncated']} excluded as truncated)")
+              f"   ({c['multi_block']} with >1 output block; excluded:"
+              f" {c['truncated']} truncated, {c['actually_correct']} actually correct)")
         print()
         table(c)
         conflict = c["tool_right"] + c["tool_other"]

@@ -289,9 +289,20 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
             # '2' where the model was writing '22'. X feeds the ruler, so a
             # fragment there makes Delta meaningless whichever split the pair
             # lands in. 104 DemyAgent traces, ~0 for the other two.
-            if last_boxed(code) is None:
+            boxed = last_boxed(code)
+            if boxed is None:
                 drops[key]["boxed_unclosed"].append(
                     (d.get("idx"), X, Y, code[-80:]))
+                continue
+
+            # The trace's own final answer matches the ground truth, yet it was
+            # scored wrong -- extract_answer (parser.py:230) mis-read it. The
+            # model was not wrong, so this is not a wrong trace, and X (that
+            # same bad pred) would otherwise sit in the ruler. ~23 traces,
+            # nearly all DemyAgent, but they were 28% of the validation split.
+            if same(boxed, Y, math_equal):
+                drops[key]["actually_correct"].append(
+                    (d.get("idx"), X, Y, f"boxed={boxed[:40]!r}"))
                 continue
 
             div, prefix, tok_Y, tok_X, prefix_ids = first_divergence(tok, X, Y)
