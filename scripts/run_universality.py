@@ -6,6 +6,11 @@
 
 Writes feats_<model>.pt, cka_<A>_<B>.npy for every model pair, overlap.json, universality_checks.json.
 Models are loaded one at a time; rows are aligned across models by pair id.
+
+Pass ONE pair file to all --models. The dataset's per-model files hold different traces and share
+no ids, so two of them would align to zero rows. Use ToRL's file: its pairs fit in 4096 tokens, so
+they fit every model, and the stored readout is only checked against the model it was built for --
+the other models re-derive tok_Y / tok_X with their own tokenizer (see circuits/data/pairs.py).
 """
 from __future__ import annotations
 

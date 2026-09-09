@@ -12,8 +12,8 @@ from .data.pairs import build_pairs, load_examples
 def add_common(p: argparse.ArgumentParser, model_arg: bool = True) -> None:
     if model_arg:
         p.add_argument("--model", required=True, help="registry name (torl, simpletir, demyagent, base) or HF repo id")
-    p.add_argument("--pairs", required=True, help="jsonl pair file (schema: tooltrust/data/pairs.py::PAIR_FILE_SCHEMA)")
-    p.add_argument("--label", default=None, help="keep only pairs with this label (accept|override)")
+    p.add_argument("--pairs", required=True, help="jsonl pair file: a docs/DATASET.md file (pairs/<model>_<split>.jsonl) or the segment format in circuits/data/pairs.py::PAIR_FILE_SCHEMA")
+    p.add_argument("--label", default=None, help="keep only pairs with this label (accept|override; dataset files map tool_case -> label)")
     p.add_argument("--max-tokens", type=int, default=None, help="left-truncate pairs longer than this")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--device", default=None)
@@ -31,7 +31,7 @@ def setup_logging(verbose: bool) -> None:
 def get_pairs(model, args, examples: list[dict] | None = None, max_tokens: int | None = "default"):
     examples = load_examples(args.pairs, args.label) if examples is None else examples
     mt = args.max_tokens if max_tokens == "default" else max_tokens
-    pairs = build_pairs(model.tokenizer, examples, max_tokens=mt)
+    pairs = build_pairs(model.tokenizer, examples, max_tokens=mt, model_name=getattr(model, "tt_name", None))
     if not pairs:
         raise SystemExit("no usable pairs")
     return examples, pairs
