@@ -8,10 +8,12 @@
 # transformer-lens 2.18.0 is the last 2.x release. HookedTransformer is its primary
 # API; 3.x deprecates it for TransformerBridge and needs transformers>=5.9.
 # It hardcodes n_ctx=2048 for Qwen2 -- tooltrust/models/load.py overrides n_ctx.
+# It pins numpy<2 only on Python <=3.12. numpy 1.x has no 3.13 wheels, so an
+# unconditional numpy<2 makes pip try a source build and abort (Colab is 3.13).
 transformer-lens==2.18.0
 transformers>=4.57,<5
 torch>=2.6
-numpy<2
+numpy<2; python_version < "3.13"
 pandas
 
 # EAP-IG is not on PyPI and the package name is `eap` (an unrelated `eap` exists on
