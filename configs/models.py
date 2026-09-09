@@ -35,6 +35,11 @@ DELIMITERS = {
 MAX_TOKENS_PER_CALL = 3072
 MAX_FUNC_CALL = 4
 
+# Context cap for the circuit stages (circuits/models/load.py). ToRL's pairs fit in
+# 4096 tokens, and one shared pair file is used for every model (docs/CIRCUIT.md),
+# so no analysis forward ever needs more, whatever a model's max_model_len says.
+MAX_CTX = 4096
+
 # Union of ATTC's two benchmark sets. Table 1 (accuracy) omits gsm8k; Figures 3
 # and 8 (Tool-Ignored) omit aime24 and amc23. We need both metrics, so we run
 # all six. 2,836 problems.
