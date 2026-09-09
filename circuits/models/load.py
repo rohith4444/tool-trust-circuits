@@ -23,6 +23,7 @@ from transformer_lens import HookedTransformer
 from transformer_lens import loading_from_pretrained as loading
 
 from configs.models import MAX_CTX, MODELS
+from circuits.models import tl_patch
 
 log = logging.getLogger(__name__)
 
@@ -48,6 +49,7 @@ def _hf_rope_theta(hf_cfg) -> float | None:
 
 def load_model(name: str, device: str | None = None, dtype=None, n_ctx: int | None = None) -> HookedTransformer:
     """Load a registry name (torl, simpletir, demyagent, base) or a raw HF repo id."""
+    tl_patch.apply()
     repo = resolve_repo(name)
     path = snapshot(name)
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
