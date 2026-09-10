@@ -4,7 +4,7 @@
     python scripts/run_localize.py --model torl --pairs pairs.jsonl --out outputs/torl
 
 Writes to --out:
-  pairs_summary.csv   Δ_clean / Δ_corrupt / top-1 token per pair -- read this first
+  pairs_summary.csv   Δ_clean / Δ_corrupt / top-1 token per pair
   node_scores.csv     every head and MLP, ranked by |EAP-IG score|
   patch_results.csv   recovery per shortlisted node (all / post-output / reverse) + noise floor
   circuit.json        role-labelled circuit; hand-off file for Interventions
@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from circuits.cli import add_common, get_pairs, setup_logging, write_json
+from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, write_json
 from circuits.hooks import node_name, set_seed
 from circuits.localize.delta import baseline, check_sign_flip
 from circuits.localize.eap import eap_ig_scores, shortlist
@@ -97,6 +97,8 @@ def main() -> None:
     write_json(out / "localize_checks.json", checks)
     print(f"wrote {out}/pairs_summary.csv, node_scores.csv, patch_results.csv, circuit.json "
           f"({len(circuit_nodes)} nodes, {sum(r['above_noise'] for r in circuit_nodes)} above noise)")
+    if not args.no_push:
+        push_outputs(out, args.hf_repo, "localize")
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import argparse
 import json
 from pathlib import Path
 
-from circuits.cli import add_common, get_pairs, setup_logging, write_json
+from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, write_json
 from circuits.hooks import all_nodes, set_seed
 from circuits.localize.delta import run_delta
 from circuits.models.load import load_model
@@ -72,6 +72,8 @@ def main() -> None:
           f"self_repair converged={result['self_repair']['converged']} in {result['self_repair']['n_iters']} iters")
     if f < 0.5:
         print("WARNING: faithfulness < 50% -- escalate (see onboarding plan)")
+    if not args.no_push:
+        push_outputs(out, args.hf_repo, "validate")
 
 
 if __name__ == "__main__":

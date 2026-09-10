@@ -23,7 +23,7 @@ from pathlib import Path
 import numpy as np
 import torch
 
-from circuits.cli import add_common, get_pairs, setup_logging, write_json
+from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, write_json
 from circuits.hooks import set_seed
 from circuits.models.load import load_model
 from circuits.universality.cka import cka_matrix, node_overlap, resid_features
@@ -88,6 +88,8 @@ def main() -> None:
     write_json(out / "overlap.json", overlaps)
     write_json(out / "universality_checks.json", checks)
     print(f"wrote {len(written)} CKA matrices and overlap.json ({len(overlaps)} circuit pairs) to {out}")
+    if not args.no_push:
+        push_outputs(out, args.hf_repo, "universality")
 
 
 if __name__ == "__main__":
