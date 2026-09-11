@@ -25,10 +25,17 @@ datasets
 
 # Required by the vendored ATTC harness in generation/.
 #
-# latex2sympy2 hard-pins antlr4-python3-runtime==4.11.1, which downgrades the
-# 4.13.2 that math-verify wanted. We dropped math-verify rather than fight it:
+# latex2sympy2 hard-pins an old antlr4-python3-runtime, which conflicts with the
+# newer one math-verify wants. We dropped math-verify rather than fight it:
 # generation/grader.py is what we grade with, so it was redundant -- and using
 # their grader is what keeps the reproduction gate honest.
+#
+# CAUTION when re-freezing: dropping it from this file does NOT remove it from
+# an environment where it was already installed, and `uv pip freeze` records
+# what is installed. The first lock file captured math-verify plus its
+# dependency latex2sympy2-extended, which needs the newer antlr -- pip tolerated
+# the inconsistent state, but uv's resolver refuses it, so the lock would not
+# reinstall on a fresh pod. Re-freeze from a clean venv, or check the diff.
 latex2sympy2
 word2number
 Pebble
