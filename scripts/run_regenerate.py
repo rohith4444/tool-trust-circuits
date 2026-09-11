@@ -86,6 +86,10 @@ def main() -> None:
     p.add_argument("--limit", type=int, default=None, help="problems per benchmark")
     p.add_argument("--max-func-call", type=int, default=regenerate.MAX_FUNC_CALL)
     p.add_argument("--max-tokens-per-call", type=int, default=regenerate.MAX_TOKENS_PER_CALL)
+    p.add_argument("--no-cache", action="store_true",
+                   help="re-run the whole sequence every token instead of using a KV "
+                        "cache. Hundreds of times slower and OOMs on long turns; only for "
+                        "checking the cached path produces identical text")
     args = p.parse_args()
     setup_logging(args.verbose)
     set_seed(args.seed)
@@ -133,7 +137,8 @@ def main() -> None:
             gt = str(row.get("gt", ""))
             r = regenerate.run_one(model, executor, extract_program,
                                    row.get("question", ""), prompt_type, hooks_at,
-                                   args.max_func_call, args.max_tokens_per_call)
+                                   args.max_func_call, args.max_tokens_per_call,
+                                   use_cache=not args.no_cache)
             pred = extract_answer(r["code"], bench)
             try:
                 score = bool(math_equal(pred, gt))
