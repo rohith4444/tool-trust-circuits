@@ -35,13 +35,13 @@ robustness check -- if the two agree by cosine the choice does not matter.
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 
 import torch
 
 from ..hooks import cache_acts, steer_hooks
 from ..localize.delta import delta, run_delta
+from .common import dedupe, run_ids
 
 log = logging.getLogger(__name__)
 
@@ -61,25 +61,6 @@ def resid_mean_hooks(pair, layers, store: dict):
             return act
         return fn
     return [(f"blocks.{layer}.hook_resid_post", make(layer)) for layer in layers]
-
-
-def run_ids(pair, run: str) -> torch.Tensor:
-    return pair.clean_ids if run == "clean" else pair.corrupt_ids
-
-
-def dedupe(pairs, run: str = "clean") -> list:
-    """Pairs with distinct token ids for this run.
-
-    On clean runs this halves the work: both Z-variants of a trace carry the same clean
-    text. On corrupt runs it changes nothing, since that is where Z differs.
-    """
-    seen, out = set(), []
-    for pair in pairs:
-        key = hashlib.sha1(run_ids(pair, run).cpu().numpy().tobytes()).hexdigest()
-        if key not in seen:
-            seen.add(key)
-            out.append(pair)
-    return out
 
 
 @torch.no_grad()

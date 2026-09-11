@@ -29,6 +29,7 @@ import torch
 from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, write_json
 from circuits.hooks import scale_hooks, set_seed, steer_hooks
 from circuits.intervene import steer
+from circuits.intervene.common import subsample
 from circuits.localize.delta import run_delta
 from circuits.models.load import load_model
 
@@ -78,6 +79,11 @@ def main() -> None:
     p.add_argument("--split", default="sign", choices=("sign", "median"),
                    help="how to cut accept from override: Δ>0 (principled) or median Δ "
                         "(balanced; use if the sign split leaves one side tiny)")
+    p.add_argument("--sweep-n", type=int, default=0,
+                   help="subsample discovery when CHOOSING (layer, alpha); 0 = all "
+                        "(default). The "
+                        "direction is always fitted on every run, and the held-out "
+                        "report always uses every pair -- only the search is subsampled")
     args = p.parse_args()
     setup_logging(args.verbose)
     set_seed(args.seed)
@@ -133,7 +139,14 @@ def main() -> None:
     direction = by_delta["direction"]
 
     # ---- sweep layers, then alpha at the winner ----
-    layer_rows = steer.sweep(model, fit_pairs, direction, range(model.cfg.n_layers),
+    # The direction above was fitted on every run; only the search for (layer, alpha) is
+    # subsampled. 28 layers over 356 runs is ~10k forwards and the ranking of layers
+    # settles long before the mean does.
+    sweep_pairs = subsample(steer.dedupe(fit_pairs, args.run), args.sweep_n, args.seed)
+    checks["sweep_n"] = len(sweep_pairs)
+    print(f"sweeping {model.cfg.n_layers} layers over {len(sweep_pairs)} runs "
+          f"= {model.cfg.n_layers * len(sweep_pairs)} forwards")
+    layer_rows = steer.sweep(model, sweep_pairs, direction, range(model.cfg.n_layers),
                              [args.probe_alpha], run=args.run)
     pd.DataFrame(layer_rows).to_csv(out / "layer_sweep.csv", index=False)
     best_layer = max(layer_rows, key=lambda r: r["delta_shift"])["layer"]
@@ -149,7 +162,7 @@ def main() -> None:
     if max(alphas) < 0.02 * typical:
         print(f"WARNING: the whole alpha range is under 2% of the residual norm. "
               f"Try --alphas 0,{typical*0.05:.0f},{typical*0.1:.0f},{typical*0.2:.0f}")
-    alpha_rows = steer.sweep(model, fit_pairs, direction, [best_layer], alphas, run=args.run)
+    alpha_rows = steer.sweep(model, sweep_pairs, direction, [best_layer], alphas, run=args.run)
     pd.DataFrame(alpha_rows).to_csv(out / "alpha_sweep.csv", index=False)
     best = max(alpha_rows, key=lambda r: r["delta_shift"])
     print(f"chosen on discovery: layer {best_layer}, alpha {best['alpha']} "
