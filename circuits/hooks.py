@@ -125,6 +125,74 @@ def cache_source(cache) -> Callable[[str], torch.Tensor]:
     return lambda hname: cache[hname]
 
 
+# --------------------------------------------------------------------------- intervention hooks
+
+def scale_hooks(scales: dict[Node, float], positions: Sequence[int]):
+    """Forward hooks multiplying each node's activation at `positions` by its scalar.
+
+    Head-scaling: turn tool-reading heads up (>1) and own-answer heads down (<1) at the
+    decision point. Same grouping as replace_hooks -- nodes sharing a hook share one
+    function -- but the per-head factors are gathered into one [H] tensor so the whole
+    layer is scaled in a single broadcast rather than a loop over heads.
+
+    A node absent from `scales` is untouched, and alpha 1.0 is an exact no-op: the
+    baseline must be reproducible by passing the identity, which is the first check.
+    """
+    by_hook: dict[str, list[tuple[int, float]]] = {}
+    for node, alpha in scales.items():
+        by_hook.setdefault(hook_name(node), []).append((node[2], float(alpha)))
+    pos_list = list(positions)
+    hooks = []
+    for hname, items in by_hook.items():
+        def fn(act, hook, hname=hname, items=items):
+            if not pos_list:
+                return act
+            pos = torch.as_tensor(pos_list, device=act.device)
+            if is_head_hook(hname):
+                mult = torch.ones(act.shape[2], device=act.device, dtype=act.dtype)
+                for idx, alpha in items:
+                    mult[idx] = alpha
+                act[:, pos] = act[:, pos] * mult[None, None, :, None]
+            else:
+                act[:, pos] = act[:, pos] * items[0][1]      # one MLP per layer
+            return act
+        hooks.append((hname, fn))
+    return hooks
+
+
+def steer_hooks(layer: int, vec: torch.Tensor, positions: Sequence[int], alpha: float = 1.0,
+                point: str = "hook_resid_post"):
+    """Add `alpha * vec` to the residual stream at `positions` of one layer.
+
+    The difference-of-means intervention: `vec` is a [d_model] direction pointing from
+    override-like residuals toward accept-like ones, added at the post-output positions
+    where the model decides whether to keep the tool's value.
+
+    Written at resid_post rather than a component output because the direction is fitted
+    to the stream itself, not to any one head -- it does not need the circuit, which is
+    why this method is not blocked on localization.
+    """
+    hname = f"blocks.{layer}.{point}"
+    pos_list = list(positions)
+
+    def fn(act, hook):
+        if not pos_list:
+            return act
+        pos = torch.as_tensor(pos_list, device=act.device)
+        act[:, pos] = act[:, pos] + (alpha * vec).to(act.dtype)
+        return act
+    return [(hname, fn)]
+
+
+def resid_filter(name: str) -> bool:
+    """Extra cache predicate for `cache_acts(..., extra=resid_filter)`.
+
+    cache_filter deliberately excludes the residual stream -- localization never reads
+    it and it is large. Fitting a steering direction does, so it is opt-in.
+    """
+    return name.endswith("hook_resid_post")
+
+
 def mean_source(means: dict[str, torch.Tensor], T: int, mode: str = "mean"):
     """Source for ablation: per-node means ([H, d_head] / [d_model]) broadcast over positions, or zeros."""
     if mode == "zero":
