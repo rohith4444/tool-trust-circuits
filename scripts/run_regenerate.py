@@ -108,7 +108,9 @@ def main() -> None:
 
     # ---- the intervention ----
     if args.method == "none":
-        hooks_at = lambda cut, n: []                      # noqa: E731 -- the gate
+        # Same (cut, offset, n_tokens) signature as hooks_factory returns, so the gate
+        # exercises the identical call path with an empty hook list.
+        hooks_at = lambda cut, offset, n: []              # noqa: E731
         label = "none (reproduction gate)"
     elif args.method == "steer":
         vec = torch.load(args.direction)["delta_split"][args.layer].to(model.cfg.device)
