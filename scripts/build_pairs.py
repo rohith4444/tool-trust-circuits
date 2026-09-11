@@ -182,58 +182,98 @@ def is_same_number(a, b):
     """
     av, bv = parse_number(a), parse_number(b)
     if av is not None and bv is not None:
-        return abs(av - bv) < 1e-6
+        # Relative, for the reason spelled out in same(): an absolute 1e-6 makes
+        # every pair of tiny numbers equal, so every candidate Z built from
+        # Y='1.325e-27' compared equal to X='0' and the trace was dropped as if
+        # it had no digits at all.
+        return math.isclose(av, bv, rel_tol=1e-9, abs_tol=0.0)
     return str(a) == str(b)
 
 
-def fabricate_Zs(Y, X, n=Z_VARIANTS):
-    """Up to n DISTINCT plausible wrong tool outputs: near Y, same magnitude.
+def fabricate_Zs(Y, X, tok, div, ids_Y, n=Z_VARIANTS):
+    """Up to n DISTINCT wrong tool outputs that actually move the metric.
 
-    Each must differ from Y (it is the wrong value), from X (see
-    is_same_number), and from the others.
+    Delta is one number from one forward pass: the prompt stops mid-answer at
+    "\\boxed{" and we read a single next-token distribution.
 
-    Perturbs the LAST digit, not the first. An earlier version changed the
-    leading digit "so Z diverges from Y at the first token" -- but Z never
-    appears in the ruler (Delta = logit(Y) - logit(X)), so its tokenisation is
-    irrelevant. That constraint bought nothing and cost realism: 113 -> 213 is
-    nearly double, and a model can dismiss it as absurd without any trust
-    arbitration. We would then be localising "detect an implausible number"
-    rather than "decide whether to believe the tool".
+        Delta = logit(Y's token at div) - logit(X's token at div)
 
-    Near-miss keeps the contrast intact -- in the corrupted run the tool
-    endorses Z, so the model leans toward Z and logit(Y) falls regardless of
-    how close Z is.
+    `div` is the first position where X and Y differ -- the only position that
+    distinguishes the two answers, since at a shared position both predict the
+    same token and the difference is identically zero.
 
-    The single shared ladder replaces two per-variant ladders that ran in
-    opposite directions. Those collided whenever Y's last digit was 0 or 9 --
-    one direction left the 0-9 range, so both variants fell through to the same
-    shift and emitted byte-identical pairs under different ids. That is ~20% of
-    answers, silently double-weighting those traces in any average.
+    So Z has one job: make the corrupted run predict something ELSE at div.
 
-    Editing the last digit rather than incrementing arithmetically keeps the
-    change local to the string, so it works on answers that are not plain
-    integers: 1.25 -> 1.26 (last decimal place), \\frac{1}{2n+2} ->
-    \\frac{1}{2n+3}, 6+9i -> 6+8i. Answers with no digit at all (\\pi, x) yield
-    nothing and the trace is dropped.
+    CONSTRAINT 1 -- Z must differ from Y at token index `div`.
+
+    The previous version perturbed Y's LAST digit and argued "Z never appears
+    in the ruler, so its tokenisation is irrelevant". That is wrong. Z is not
+    in the formula, but the model copies the tool value, so Z decides what the
+    model predicts -- and the formula reads that prediction:
+
+        X=49  Y=113  Z=114   Delta = logit('1') - logit('4')
+          clean      tool says 113 -> model predicts '1'
+          corrupted  tool says 114 -> model predicts '1'   <-- same, Delta frozen
+
+    114 is wrong, but wrong in a character the metric never looks at. Measured
+    over the built corpus, 80% of pairs were inert this way. It worked only
+    where div happened to land on Y's last token -- single-digit answers.
+
+    CONSTRAINT 2 -- Z must tokenise to the same length as Y.
+
+    Activation patching splices a component's activation from one run into the
+    other at matching positions. If Z is 2 tokens where Y is 3, every position
+    after the injected value shifts and the runs stop corresponding.
+
+    WHAT THIS COSTS
+
+    Constraint 1 forces the edit onto the digit at `div`, so a multi-digit
+    answer moves further than before (113 -> 213, not 113 -> 114). That is the
+    price of a metric that responds at all, and it costs less realism than it
+    looks: the model has no access to the ground truth, so it cannot tell that
+    Z is wrong. What it could notice is a wrong SHAPE -- hence constraint 2 and
+    the leading-zero guard.
+
+    WHAT IT DROPS
+
+    Nothing when the character at `div` is a digit. When it is a sign, a comma,
+    or a LaTeX command, no digit edit reaches it and the trace is dropped:
+
+        X=1     Y=-1        div is the '-'
+        X=6000  Y=6,600     shared '6', so div=1, which is the ','
+        X=10    Y=\\sqrt{51}  div is '\\sqrt'
+
+    ~21% of pairs. Recovering them needs a Z that can vary token count or edit
+    non-digits, which breaks constraint 2 or plausibility respectively -- a
+    shape-aware fabricator, not a tweak. Noted for ICLR.
+
+    Positions are searched in order so the first match lands on `div` itself,
+    and shifts run +-1 before +-2, so the value is the smallest change the
+    constraints allow. Character-level editing means symbolic answers still
+    work (\\frac{1}{2n+2}) as long as div falls on one of their digits.
     """
     s = str(Y)
-    digits = [i for i, ch in enumerate(s) if ch.isdigit()]
-    if not digits:
-        return []
-    i = digits[-1]  # trailing digit: preserves order of magnitude
-    d = int(s[i])
     out = []
-    # Interleaved so the first two are Y+1 and Y-1 in the ordinary case.
-    for shift in (1, -1, 2, -2, 3, -3):
-        nd = d + shift
-        if not (0 <= nd <= 9):
-            continue
-        cand = s[:i] + str(nd) + s[i + 1:]
-        if cand == s or cand in out or is_same_number(cand, X):
-            continue
-        out.append(cand)
-        if len(out) == n:
-            break
+    for pos in (i for i, ch in enumerate(s) if ch.isdigit()):
+        for shift in (1, -1, 2, -2, 3, -3):
+            d = int(s[pos]) + shift
+            if not (0 <= d <= 9):
+                continue
+            cand = s[:pos] + str(d) + s[pos + 1:]
+            if cand == s or cand in out or is_same_number(cand, X):
+                continue
+            # A printed number carries no leading zero; "013" is a shape no
+            # sandbox would emit.
+            if len(cand) > 1 and cand[0] == "0" and cand[1].isdigit():
+                continue
+            ids = tok.encode(cand, add_special_tokens=False)
+            if len(ids) != len(ids_Y):
+                continue                        # constraint 2
+            if div >= len(ids) or ids[div] == ids_Y[div]:
+                continue                        # constraint 1
+            out.append(cand)
+            if len(out) == n:
+                return out
     return out
 
 
@@ -310,9 +350,15 @@ def build_for_model(key, runs, tok, limit, drops, math_equal):
                 drops[key]["divergence_none"].append((d.get("idx"), X, Y, code[-200:]))
                 continue
 
-            Zs = fabricate_Zs(Y, X)
+            # Renamed from no_digit_in_Y: the reason is now broader than "Y has
+            # no digits". A trace also lands here when Y has digits but none of
+            # them sits at `div` -- Y='-1' against X='1', Y='6,600' against
+            # X='6000'. See fabricate_Zs.
+            ids_Y = tok.encode(Y, add_special_tokens=False)
+            Zs = fabricate_Zs(Y, X, tok, div, ids_Y)
             if not Zs:
-                drops[key]["no_digit_in_Y"].append((d.get("idx"), X, Y, ""))
+                drops[key]["no_usable_Z"].append(
+                    (d.get("idx"), X, Y, f"div={div}"))
                 continue
 
             # Inject into the LAST block: it is the result the model saw most

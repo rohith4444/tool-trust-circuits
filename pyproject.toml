@@ -1,0 +1,16 @@
+[project]
+name = "circuits"
+version = "0.0.1"
+description = "Circuit analysis of tool trust in tool-integrated reasoning models"
+requires-python = ">=3.10"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = [
+  "configs",
+  "circuits", "circuits.models", "circuits.data", "circuits.localize",
+  "circuits.validate", "circuits.universality",
+]
