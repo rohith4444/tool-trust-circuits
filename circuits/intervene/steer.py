@@ -35,11 +35,12 @@ robustness check -- if the two agree by cosine the choice does not matter.
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 
 import torch
 
-from ..hooks import cache_acts, resid_filter, steer_hooks
+from ..hooks import cache_acts, steer_hooks
 from ..localize.delta import delta, run_delta
 
 log = logging.getLogger(__name__)
@@ -62,25 +63,60 @@ def resid_mean_hooks(pair, layers, store: dict):
     return [(f"blocks.{layer}.hook_resid_post", make(layer)) for layer in layers]
 
 
+def run_ids(pair, run: str) -> torch.Tensor:
+    return pair.clean_ids if run == "clean" else pair.corrupt_ids
+
+
+def dedupe(pairs, run: str = "clean") -> list:
+    """Pairs with distinct token ids for this run.
+
+    On clean runs this halves the work: both Z-variants of a trace carry the same clean
+    text. On corrupt runs it changes nothing, since that is where Z differs.
+    """
+    seen, out = set(), []
+    for pair in pairs:
+        key = hashlib.sha1(run_ids(pair, run).cpu().numpy().tobytes()).hexdigest()
+        if key not in seen:
+            seen.add(key)
+            out.append(pair)
+    return out
+
+
 @torch.no_grad()
 def collect(model, pairs, run: str = "clean") -> dict:
-    """Per-pair Δ and per-layer mean residual at the post-output positions.
+    """Per-run Δ and per-layer mean residual at the post-output positions.
 
-    Returns resid [n_pairs, n_layers, d_model] fp32 on CPU, deltas [n_pairs], and the
-    pair ids/labels so the caller can slice.
+    Deduplicated by the exact token ids. Both Z-variants of a trace share one
+    `clean_text` -- Z appears only in the corrupt text -- so a ToRL discovery file of 712
+    pairs holds just 356 distinct clean runs. Without this the fit would spend half its
+    forwards on byte-identical repeats and report double the population sizes. On corrupt
+    runs every pair differs, so the dedup is a no-op there.
+
+    Returns resid [n_runs, n_layers, d_model] fp32 on CPU, deltas [n_runs], and the
+    ids/labels so the caller can slice.
     """
     layers = list(range(model.cfg.n_layers))
     resid, deltas, ids, cases = [], [], [], []
-    for pair in pairs:
-        ids_t = pair.clean_ids if run == "clean" else pair.corrupt_ids
+    for pair in dedupe(pairs, run):
+        ids_t = run_ids(pair, run)
         store: dict[int, torch.Tensor] = {}
-        logits, _ = cache_acts(model, ids_t, fwd_hooks=resid_mean_hooks(pair, layers, store),
-                               extra=resid_filter)
+        # No `extra=` here on purpose. Forward hooks fire regardless of the cache's
+        # names_filter, so the reducing hooks above already have the residual stream;
+        # adding resid_post to the filter as well would cache all [T, d_model] of it
+        # per layer -- ~800 MB a forward at 4k tokens -- and then throw it away.
+        if not len(pair.post_output):
+            raise ValueError(f"pair {pair.id} has no post-output positions to average over")
+        logits, _ = cache_acts(model, ids_t, fwd_hooks=resid_mean_hooks(pair, layers, store))
         deltas.append(delta(logits, pair.own_tok, pair.tool_tok, pair.measure_pos).item())
         resid.append(torch.stack([store[layer] for layer in layers]))
         ids.append(pair.id)
         cases.append(pair.meta.get("tool_case"))
-    return dict(resid=torch.stack(resid), deltas=torch.tensor(deltas), ids=ids, cases=cases)
+    out = torch.stack(resid)
+    # A NaN here would propagate into the direction and out into every swept Δ, without
+    # raising anything -- it would just look like the intervention doing nothing.
+    if not torch.isfinite(out).all():
+        raise ValueError("non-finite residuals collected; check post_output and dtype")
+    return dict(resid=out, deltas=torch.tensor(deltas), ids=ids, cases=cases)
 
 
 def _difference(resid: torch.Tensor, accept_mask: torch.Tensor, override_mask: torch.Tensor) -> dict:
@@ -96,14 +132,33 @@ def _difference(resid: torch.Tensor, accept_mask: torch.Tensor, override_mask: t
         raise ValueError(f"need both populations, got accept={n_acc} override={n_ovr}")
     d = resid[accept_mask].mean(0) - resid[override_mask].mean(0)         # [n_layers, d_model]
     norm = d.norm(dim=-1)                                                  # [n_layers]
+    # Mean of the norms, not the norm of the mean: residuals point in different
+    # directions across runs, so averaging first shrinks the vector and would make the
+    # direction look larger relative to the stream than it is. This number is only used
+    # to pick sane alphas, and a wrong one picks wrong alphas.
+    typical = resid.norm(dim=-1).mean(0)                                   # [n_layers]
     return dict(direction=d / norm[:, None].clamp_min(1e-8), raw_norm=norm,
-                resid_norm=resid.mean(0).norm(dim=-1), n_accept=n_acc, n_override=n_ovr)
+                resid_norm=typical, n_accept=n_acc, n_override=n_ovr)
 
 
-def direction_from_delta(collected: dict) -> dict:
-    """Split on the sign of Δ measured on the run itself. The primary definition."""
+def direction_from_delta(collected: dict, split: str = "sign") -> dict:
+    """Split the runs by Δ and difference their residuals.
+
+    `sign` is the principled cut -- Δ > 0 means the model actually prefers the tool's
+    value. But in a clean run the tool reports the truth and these models mostly copy it,
+    so the override group can come out small and the direction noisy. `median` splits at
+    the median Δ instead, guaranteeing balanced halves at the cost of calling some
+    weakly-positive runs "override". Check n_accept / n_override before trusting `sign`.
+    """
     d = collected["deltas"]
-    return _difference(collected["resid"], d > 0, d < 0) | dict(split="delta_sign")
+    if split == "sign":
+        acc, ovr = d > 0, d < 0
+    elif split == "median":
+        med = d.median()
+        acc, ovr = d > med, d <= med
+    else:
+        raise ValueError(f"unknown split {split!r}")
+    return _difference(collected["resid"], acc, ovr) | dict(split=f"delta_{split}")
 
 
 def direction_from_labels(collected: dict) -> dict:
@@ -125,9 +180,8 @@ def cosine(a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
 
 @torch.no_grad()
 def steered_delta(model, pair, layer: int, vec: torch.Tensor, alpha: float, run: str = "clean") -> float:
-    ids = pair.clean_ids if run == "clean" else pair.corrupt_ids
     hooks = steer_hooks(layer, vec.to(model.cfg.device), pair.post_output, alpha)
-    return run_delta(model, ids, pair, hooks)
+    return run_delta(model, run_ids(pair, run), pair, hooks)
 
 
 @torch.no_grad()
@@ -138,7 +192,8 @@ def sweep(model, pairs, direction: torch.Tensor, layers, alphas, run: str = "cle
     alpha first and only then sweep alpha at the winning layer -- the grid is separable
     enough in practice and the full product is an hour where the two passes are minutes.
     """
-    base = [run_delta(model, (p.clean_ids if run == "clean" else p.corrupt_ids), p) for p in pairs]
+    pairs = dedupe(pairs, run)
+    base = [run_delta(model, run_ids(p, run), p) for p in pairs]
     base_mean = float(sum(base) / len(base))
     rows = []
     for layer in layers:

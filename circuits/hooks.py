@@ -184,15 +184,6 @@ def steer_hooks(layer: int, vec: torch.Tensor, positions: Sequence[int], alpha: 
     return [(hname, fn)]
 
 
-def resid_filter(name: str) -> bool:
-    """Extra cache predicate for `cache_acts(..., extra=resid_filter)`.
-
-    cache_filter deliberately excludes the residual stream -- localization never reads
-    it and it is large. Fitting a steering direction does, so it is opt-in.
-    """
-    return name.endswith("hook_resid_post")
-
-
 def mean_source(means: dict[str, torch.Tensor], T: int, mode: str = "mean"):
     """Source for ablation: per-node means ([H, d_head] / [d_model]) broadcast over positions, or zeros."""
     if mode == "zero":

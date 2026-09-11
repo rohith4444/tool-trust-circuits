@@ -75,6 +75,9 @@ def main() -> None:
     p.add_argument("--alphas", default="0,0.5,1,2,4,8", help="comma-separated, swept at the winning layer")
     p.add_argument("--run", default="clean", choices=("clean", "corrupt"),
                    help="which run to fit and steer on; clean is the real failure condition")
+    p.add_argument("--split", default="sign", choices=("sign", "median"),
+                   help="how to cut accept from override: Δ>0 (principled) or median Δ "
+                        "(balanced; use if the sign split leaves one side tiny)")
     args = p.parse_args()
     setup_logging(args.verbose)
     set_seed(args.seed)
@@ -97,9 +100,21 @@ def main() -> None:
 
     # ---- fit ----
     collected = steer.collect(model, fit_pairs, run=args.run)
-    by_delta = steer.direction_from_delta(collected)
-    checks["fit_split"] = dict(n_accept=by_delta["n_accept"], n_override=by_delta["n_override"])
-    print(f"fit split: {by_delta['n_accept']} accept / {by_delta['n_override']} override")
+    by_delta = steer.direction_from_delta(collected, split=args.split)
+    checks["fit_split"] = dict(n_accept=by_delta["n_accept"], n_override=by_delta["n_override"],
+                               how=by_delta["split"])
+    print(f"fit split ({by_delta['split']}): {by_delta['n_accept']} accept / "
+          f"{by_delta['n_override']} override")
+    # In a clean run the tool reports the truth and these models mostly copy it, so the
+    # sign split can leave one side too small to average meaningfully.
+    if min(by_delta["n_accept"], by_delta["n_override"]) < 20:
+        print(f"WARNING: smaller population is {min(by_delta['n_accept'], by_delta['n_override'])} runs. "
+              f"Consider --split median.")
+    d = collected["deltas"]
+    checks["delta_distribution"] = dict(mean=float(d.mean()), median=float(d.median()),
+                                        frac_positive=float((d > 0).float().mean()))
+    print(f"fit Δ: mean {d.mean():+.3f}  median {d.median():+.3f}  "
+          f"{(d > 0).float().mean():.0%} positive")
 
     saved = dict(delta_split=by_delta["direction"], raw_norm=by_delta["raw_norm"],
                  resid_norm=by_delta["resid_norm"])
@@ -123,19 +138,37 @@ def main() -> None:
     pd.DataFrame(layer_rows).to_csv(out / "layer_sweep.csv", index=False)
     best_layer = max(layer_rows, key=lambda r: r["delta_shift"])["layer"]
 
+    # The direction is a unit vector, so alpha is an absolute length added to a residual
+    # whose own norm is whatever it is. Without this, an alpha range that is 1% of the
+    # stream looks like "steering does nothing" rather than "we did not push hard enough".
+    typical = float(by_delta["resid_norm"][best_layer])
+    checks["resid_norm_at_best_layer"] = typical
     alphas = [float(a) for a in args.alphas.split(",")]
+    print(f"layer {best_layer}: typical residual norm {typical:.1f}; "
+          f"alphas {alphas} are {100*max(alphas)/typical:.1f}% of it at the top end")
+    if max(alphas) < 0.02 * typical:
+        print(f"WARNING: the whole alpha range is under 2% of the residual norm. "
+              f"Try --alphas 0,{typical*0.05:.0f},{typical*0.1:.0f},{typical*0.2:.0f}")
     alpha_rows = steer.sweep(model, fit_pairs, direction, [best_layer], alphas, run=args.run)
     pd.DataFrame(alpha_rows).to_csv(out / "alpha_sweep.csv", index=False)
     best = max(alpha_rows, key=lambda r: r["delta_shift"])
     print(f"chosen on discovery: layer {best_layer}, alpha {best['alpha']} "
           f"(Δ shift {best['delta_shift']:+.3f})")
+    # max() always returns something, so without this a direction that helps nowhere
+    # still produces a confident-looking "chosen" line and a held-out table.
+    if best["delta_shift"] <= 0:
+        print("WARNING: no (layer, alpha) improved Δ on discovery. The held-out numbers "
+              "below are reporting the least-bad option, not a working intervention.")
+    checks["improves_on_discovery"] = bool(best["delta_shift"] > 0)
 
     # ---- report on held-out ----
     vec = direction[best_layer]
     rows = []
-    for pair in eval_pairs:
-        ids = pair.clean_ids if args.run == "clean" else pair.corrupt_ids
-        before = run_delta(model, ids, pair)
+    # One row per distinct run, not per pair: on clean runs the two Z-variants of a
+    # trace are byte-identical, so keeping both would double-count every trace in the
+    # held-out average.
+    for pair in steer.dedupe(eval_pairs, args.run):
+        before = run_delta(model, steer.run_ids(pair, args.run), pair)
         after = steer.steered_delta(model, pair, best_layer, vec, best["alpha"], args.run)
         rows.append(dict(id=pair.id, tool_case=pair.meta.get("tool_case"),
                          delta_before=before, delta_after=after, shift=after - before,
