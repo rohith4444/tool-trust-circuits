@@ -30,3 +30,6 @@ hf_cache/
 # Local
 .DS_Store
 .env
+
+# Downloaded HF artifacts -- pairs, judge labels, circuits, results. Never committed.
+hf_data/
