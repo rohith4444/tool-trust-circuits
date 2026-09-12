@@ -51,14 +51,24 @@ RANK_COLUMNS = ("eap", "rec_all", "rec_postout")
 
 
 def rank_nodes(circuit: dict, rank_by: str, only_above_noise: bool,
-               node_scores: str | None = None) -> list[tuple[str, int, int]]:
+               node_scores: str | None = None,
+               exclude_layers: set[int] | None = None) -> list[tuple[str, int, int]]:
     """Nodes in selection order, best first.
 
     From node_scores.csv when given -- every node in the model, so k is not capped at the
     shortlist size. Otherwise from circuit.json, which holds only the shortlist. The two
     agree on the first `topn` entries when rank_by is `eap`, by construction: the shortlist
     is the EAP top-n.
+
+    `exclude_layers` drops whole layers before ranking, so the top-k is taken from what
+    remains. Layer 0 is the case that matters. Attribution ranks it first on all three
+    models (ToRL's top two nodes are a0.h3 and m0) because every path runs through it, not
+    because it is selective; mean-ablating MLP0 across positions replaces token-specific
+    embedding processing with a constant and erases token identity downstream. Wang et al.
+    exclude MLP0 from the IOI circuit for the same reason, treating it as part of the
+    extended embedding.
     """
+    exclude_layers = exclude_layers or set()
     if node_scores:
         import pandas as pd
         if rank_by != "eap":
@@ -66,11 +76,13 @@ def rank_nodes(circuit: dict, rank_by: str, only_above_noise: bool,
                              "patching columns); drop --node-scores or use --rank-by eap")
         # to_dict, not itertuples: the file has a column literally named "index"
         df = pd.read_csv(node_scores).sort_values("rank")
-        return [(r["type"], int(r["layer"]), int(r["index"])) for r in df.to_dict("records")]
-    rows = [n for n in circuit["nodes"] if not only_above_noise or n["above_noise"]]
-    rows = sorted(rows, key=(lambda n: n["eap_rank"]) if rank_by == "eap"
-                  else (lambda n: -abs(float(n[rank_by]))))
-    return [(n["type"], int(n["layer"]), int(n["index"])) for n in rows]
+        nodes = [(r["type"], int(r["layer"]), int(r["index"])) for r in df.to_dict("records")]
+    else:
+        rows = [n for n in circuit["nodes"] if not only_above_noise or n["above_noise"]]
+        rows = sorted(rows, key=(lambda n: n["eap_rank"]) if rank_by == "eap"
+                      else (lambda n: -abs(float(n[rank_by]))))
+        nodes = [(n["type"], int(n["layer"]), int(n["index"])) for n in rows]
+    return [n for n in nodes if n[1] not in exclude_layers]
 
 
 def main() -> None:
@@ -85,6 +97,10 @@ def main() -> None:
                         "the topn shortlist in circuit.json (needed for k-curve points above topn)")
     p.add_argument("--rank-by", default="eap", choices=RANK_COLUMNS,
                    help="ordering column; rec_all / rec_postout exist only in circuit.json")
+    p.add_argument("--exclude-layers", default=None,
+                   help="comma-separated layers to drop before ranking, e.g. 0. Attribution "
+                        "ranks layer 0 first because every path runs through it; ablating MLP0 "
+                        "erases token identity rather than any specific mechanism")
     p.add_argument("--topk", type=int, default=None, help="keep the top k nodes (default: all in the file)")
     p.add_argument("--k-curve", default=None,
                    help="comma-separated circuit sizes to sweep, e.g. 10,25,50,100,200")
@@ -110,9 +126,12 @@ def main() -> None:
     pos = args.positions
 
     circuit = json.load(open(args.circuit))
-    ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores)
+    excl = {int(x) for x in args.exclude_layers.split(",")} if args.exclude_layers else set()
+    ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores, excl)
     if not ranked:
         raise SystemExit("empty circuit")
+    if excl:
+        print(f"excluding layers {sorted(excl)}: {len(ranked)} nodes remain")
     # default topk is the shortlist size even when ranking over every node, so the main
     # circuit stays the one the earlier runs reported on
     topk = args.topk or min(len(ranked), circuit.get("topn", len(ranked)))
@@ -160,6 +179,7 @@ def main() -> None:
 
     result = dict(
         model=args.model, circuit=str(args.circuit), rank_by=args.rank_by, positions=pos,
+        exclude_layers=sorted(excl),
         n_nodes=len(circuits[main_name]), n_pairs=len(pairs), mode=mode, seed=args.seed,
         circuit_sizes={k: len(v) for k, v in circuits.items()},
         necessity=necessity(df, main_name),
