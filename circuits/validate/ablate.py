@@ -134,8 +134,8 @@ def matched_draw(universe: list[Node], template: list[Node], rng: random.Random)
     return out
 
 
-def ablatable(cfg, protect: set[int] | None = None) -> list[Node]:
-    """Every node that may be ablated: all of them, minus the protected layers.
+def ablatable(cfg, protect: set[int] | None = None, protect_types: str = "") -> list[Node]:
+    """Every node that may be ablated: all of them, minus the protected layers and types.
 
     Layer 0 is protected by convention. MLP0 turns token ids into the representation
     everything downstream reads; mean-ablating it does not remove a mechanism, it removes
@@ -143,15 +143,28 @@ def ablatable(cfg, protect: set[int] | None = None) -> list[Node]:
     the circuit-only run has no text to work from, so the number measures nothing (ToRL:
     0.412 with m0 kept, 0.069 with it ablated). Wang et al. treat MLP0 as part of the
     extended embedding for the same reason: never ablated, never counted as circuit.
+
+    `protect_types="m"` extends that to every MLP, which is the IOI setup: the circuit is a
+    set of attention heads, and faithfulness ablates only the heads outside it while MLPs
+    and embeddings stay intact. The same degeneracy argument applies at full strength --
+    ablating all 28 MLPs leaves a model that cannot compute anything, so "how much does the
+    circuit reproduce" stops being a question about the circuit. It is also required for the
+    comparison the paper already makes: IOI's 87% was measured this way, and a faithfulness
+    figure from a different ablation scope is not comparable to it.
+
+    Necessity and specificity are unaffected -- both ablate the circuit itself, which
+    contains no MLPs when the circuit is heads-only, so MLPs were already intact there.
     """
     protect = protect or set()
-    return [n for n in all_nodes(cfg) if n[1] not in protect]
+    return [n for n in all_nodes(cfg)
+            if n[1] not in protect and n[0] not in set(protect_types)]
 
 
 @torch.no_grad()
 def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: str = "mean",
                    positions: str = "postout", k_random: int = 20, seed: int = 0,
-                   main: str | None = None, protect: set[int] | None = None) -> pd.DataFrame:
+                   main: str | None = None, protect: set[int] | None = None,
+                   protect_types: str = "") -> pd.DataFrame:
     """Every Δ the metrics need, one row per pair. This is the only GPU-bound part.
 
     `circuits` maps a name to a node list; the k-curve passes {"k10": [...], "k50": [...]}.
@@ -169,7 +182,7 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
     main = main or next(iter(circuits))
     if main not in circuits:
         raise KeyError(f"main circuit {main!r} not in {sorted(circuits)}")
-    universe = ablatable(model.cfg, protect)
+    universe = ablatable(model.cfg, protect, protect_types)
     rng = random.Random(seed)
     # matched on head/MLP composition -- see matched_draw
     draws = [matched_draw(universe, circuits[main], rng) for _ in range(k_random)]
@@ -202,7 +215,7 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
     df = pd.DataFrame(rows)
     df.attrs.update(main=main, k_random=k_random, mode=mode, positions=positions,
                     sizes={k: len(v) for k, v in circuits.items()},
-                    protect=sorted(protect or []), n_ablatable=len(universe))
+                    protect=sorted(protect or []), protect_types=protect_types, n_ablatable=len(universe))
     return df
 
 

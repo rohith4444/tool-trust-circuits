@@ -113,6 +113,11 @@ def main() -> None:
                         "turns token ids into what the rest of the model reads, so ablating it "
                         "removes the input rather than a mechanism; Wang et al. treat it as part "
                         "of the extended embedding. Pass '' to disable")
+    p.add_argument("--protect-types", default="",
+                   help="node types never ablated and never circuit: 'm' keeps every MLP as "
+                        "substrate, which is the IOI setup (circuit = attention heads, only "
+                        "non-circuit heads are ablated). Ablating all MLPs leaves nothing that "
+                        "can compute, so faithfulness stops measuring the circuit")
     p.add_argument("--exclude-layers", default=None,
                    help="comma-separated layers to drop before ranking, e.g. 0. Attribution "
                         "ranks layer 0 first because every path runs through it; ablating MLP0 "
@@ -157,6 +162,8 @@ def main() -> None:
     # protected layers are not ablatable, so they cannot be circuit members either
     ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores,
                         excl | protect)
+    if args.protect_types:
+        ranked = [n for n in ranked if n[0] not in set(args.protect_types)]
     if set(args.node_types) != {'a', 'm'}:
         ranked = [n for n in ranked if n[0] in set(args.node_types)]
         print(f"node types {args.node_types!r}: {len(ranked)} nodes remain")
@@ -195,13 +202,14 @@ def main() -> None:
     d_empty = ablate(model, p0, [], means, mode, pos)
     if abs(d_empty - d_base) > 1e-6:
         raise AssertionError(f"ablate(empty) {d_empty} != baseline {d_base}")
-    universe = ablatable(model.cfg, protect)
+    universe = ablatable(model.cfg, protect, args.protect_types)
     d_all = ablate(model, p0, universe, means, mode, pos)
     checks = dict(ablate_empty_equals_baseline=True, delta_base=d_base, delta_all_ablated=d_all,
                   floor_over_signal=abs(d_all) / (abs(d_base) + 1e-8))
 
     df = collect_deltas(model, pairs, circuits, means, mode=mode, positions=pos,
-                        k_random=args.k_random, seed=args.seed, main=main_name, protect=protect)
+                        k_random=args.k_random, seed=args.seed, main=main_name, protect=protect,
+                        protect_types=args.protect_types)
     df.to_csv(out / "validation_pairs.csv", index=False)
 
     # faithfulness(all nodes) == 1 and faithfulness(empty) == 0 are identities of the
@@ -218,6 +226,7 @@ def main() -> None:
     result = dict(
         model=args.model, circuit=str(args.circuit), rank_by=args.rank_by, positions=pos,
         exclude_layers=sorted(excl), protect_layers=sorted(protect), node_types=args.node_types,
+        protect_types=args.protect_types,
         only_above_noise=args.only_above_noise, n_ablatable=len(universe),
         n_nodes=len(circuits[main_name]), n_pairs=len(pairs), mode=mode, seed=args.seed,
         circuit_sizes={k: len(v) for k, v in circuits.items()},
