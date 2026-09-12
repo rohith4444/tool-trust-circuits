@@ -60,18 +60,25 @@ def ablate(model, pair, nodes, means, mode: str = "mean") -> float:
 
 
 def necessity(model, pairs, circuit: list[Node], means, k_random: int = 20, seed: int = 0, mode: str = "mean") -> dict:
+    """Ablate the circuit on the corrupt run; how much own-answer preference is lost vs random node sets.
+
+    Δ is read on the corrupt run, where the tool is lying, so the good outcome is NEGATIVE
+    Δ (the model keeps its own answer). The preference we measure is therefore -Δ, and the
+    loss of it after ablation is `ablated - base`, not `base - ablated`. A positive gap means
+    ablating the circuit pushed the model toward the fake tool value.
+    """
     rng = random.Random(seed)
     universe = all_nodes(model.cfg)
     draws = [rng.sample(universe, len(circuit)) for _ in range(k_random)]
     base = np.array([run_delta(model, p.corrupt_ids, p) for p in pairs])
     abl = np.array([ablate(model, p, circuit, means, mode) for p in pairs])
     rand = np.array([[ablate(model, p, d, means, mode) for p in pairs] for d in draws])   # [k, n_pairs]
-    drop = base - abl
-    rand_drop = (base[None] - rand).mean(1)
+    drop = abl - base
+    rand_drop = (rand - base[None]).mean(1)
     gap = float(drop.mean())
     return dict(
         delta_base=float(base.mean()), delta_ablated=float(abl.mean()),
-        necessity_gap=gap, abs_delta_drop=float((np.abs(base) - np.abs(abl)).mean()),
+        necessity_gap=gap, n_base_positive=int((base > 0).sum()),
         random_dist=rand_drop.tolist(), random_mean=float(rand_drop.mean()),
         random_p95=float(np.percentile(rand_drop, 95)), above_random=bool(gap > np.percentile(rand_drop, 95)),
         k_random=k_random, circuit_size=len(circuit), mode=mode,
@@ -131,14 +138,17 @@ def faithfulness(model, pairs, circuit: list[Node], means, mode: str = "mean") -
         alls.append(ablate(model, pair, universe, means, mode))
         circs.append(ablate(model, pair, complement, means, mode))
     base, alls, circs = map(np.array, (base, alls, circs))
-    # IOI convention (Wang et al.): F(circuit) / F(model), pooled over pairs. The floor-adjusted
-    # variant subtracts the everything-ablated Δ, which is not ~0 in general (the ablated stream
-    # is the normalised token embedding, with its own arbitrary digit preference).
+    # The reported number is the floor-adjusted ratio: how far the circuit alone moves Δ from
+    # the everything-ablated floor toward the full model, pooled over pairs. The floor is not
+    # ~0 in general (the ablated stream is the normalised token embedding, with its own
+    # arbitrary digit preference), and when it sits on the other side of zero from base the
+    # raw IOI ratio F(circuit) / F(model) (Wang et al.) goes negative. The raw ratio is kept
+    # for comparison only.
     den = float(base.sum())
     den_floor = float((base - alls).sum())
     return dict(
-        faithfulness=float(circs.sum() / den) if den else float("nan"),
         faithfulness_floor_adjusted=float((circs - alls).sum() / den_floor) if den_floor else float("nan"),
+        faithfulness=float(circs.sum() / den) if den else float("nan"),
         delta_base=float(base.mean()), delta_all_ablated=float(alls.mean()), delta_circuit_only=float(circs.mean()),
         all_ablated_ratio=float(np.abs(alls).mean() / (np.abs(base).mean() + 1e-8)),
         circuit_size=len(circuit), mode=mode,

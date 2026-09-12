@@ -4,6 +4,10 @@
     python scripts/run_validate.py --model torl --pairs pairs.jsonl --circuit outputs/torl/circuit.json --out outputs/torl
 
 Writes validation.json (and means.pt, the cached ablation means) to --out.
+
+Sign convention: every Δ here is read on the CORRUPT run, where the tool is lying, so
+negative Δ is the good outcome. necessity_gap is loss of that preference (positive = the
+circuit mattered); faithfulness_floor_adjusted is the headline faithfulness number.
 """
 from __future__ import annotations
 
@@ -51,7 +55,7 @@ def main() -> None:
     if abs(d_empty - d_base) > 1e-6:
         raise AssertionError(f"ablate(empty) {d_empty} != baseline {d_base}")
     d_all = ablate(model, p0, all_nodes(model.cfg), means, mode)
-    f_all = faithfulness(model, pairs[:1], all_nodes(model.cfg), means, mode)["faithfulness"]
+    f_all = faithfulness(model, pairs[:1], all_nodes(model.cfg), means, mode)["faithfulness_floor_adjusted"]
     if abs(f_all - 1.0) > 1e-3:
         raise AssertionError(f"faithfulness(all nodes) = {f_all} != 1")
     checks = dict(ablate_empty_equals_baseline=True, delta_base=d_base, delta_all_ablated=d_all,
@@ -66,9 +70,10 @@ def main() -> None:
         checks=checks,
     )
     write_json(out / "validation.json", result)
-    f = result["faithfulness"]["faithfulness"]
+    f = result["faithfulness"]["faithfulness_floor_adjusted"]
+    f_raw = result["faithfulness"]["faithfulness"]
     print(f"wrote {out}/validation.json: necessity_gap={result['necessity']['necessity_gap']:.3f} "
-          f"(random p95 {result['necessity']['random_p95']:.3f}), faithfulness={f:.3f}, "
+          f"(random p95 {result['necessity']['random_p95']:.3f}), faithfulness={f:.3f} (raw {f_raw:.3f}), "
           f"self_repair converged={result['self_repair']['converged']} in {result['self_repair']['n_iters']} iters")
     if f < 0.5:
         print("WARNING: faithfulness < 50% -- escalate (see onboarding plan)")
