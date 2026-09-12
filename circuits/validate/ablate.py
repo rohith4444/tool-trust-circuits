@@ -111,6 +111,29 @@ def ablate(model, pair, nodes, means, mode: str = "mean", positions: str = "post
 
 # --------------------------------------------------------------------------- collection
 
+def matched_draw(universe: list[Node], template: list[Node], rng: random.Random) -> list[Node]:
+    """A random node set with the same head/MLP composition as `template`.
+
+    An unmatched draw is not a control here. A model has n_layers MLPs against
+    n_layers*n_heads heads -- 28 against 784 on ToRL -- so a uniform sample of 37 nodes
+    holds about 1.3 MLPs, while the confirmed circuit holds 17, which is 61% of every MLP
+    in the model. Ablating that many MLPs damages the model whatever they compute, so the
+    comparison measured "MLP-heavy set versus head-heavy set" rather than "these nodes
+    versus other nodes", and the second is the only thing the circuit claim is about.
+
+    Sampling per type keeps the recipe fixed and leaves the choice of components as the
+    single difference.
+    """
+    by_type: dict[str, list[Node]] = {}
+    for n in universe:
+        by_type.setdefault(n[0], []).append(n)
+    out: list[Node] = []
+    for t, group in by_type.items():
+        want = sum(1 for n in template if n[0] == t)
+        out += rng.sample(group, min(want, len(group)))
+    return out
+
+
 def ablatable(cfg, protect: set[int] | None = None) -> list[Node]:
     """Every node that may be ablated: all of them, minus the protected layers.
 
@@ -148,7 +171,8 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
         raise KeyError(f"main circuit {main!r} not in {sorted(circuits)}")
     universe = ablatable(model.cfg, protect)
     rng = random.Random(seed)
-    draws = [rng.sample(universe, len(circuits[main])) for _ in range(k_random)]
+    # matched on head/MLP composition -- see matched_draw
+    draws = [matched_draw(universe, circuits[main], rng) for _ in range(k_random)]
     complements = {name: [n for n in universe if n not in set(nodes)] for name, nodes in circuits.items()}
 
     per_pair = 2 + 2 * len(circuits) + k_random

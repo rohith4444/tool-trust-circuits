@@ -54,6 +54,7 @@ from circuits.hooks import set_seed
 from circuits.localize.delta import run_delta
 from circuits.models.load import load_model
 from circuits.validate.ablate import (POSITIONS, ablatable, ablate, collect_deltas, faithfulness, k_curve,
+                                      matched_draw,
                                       necessity, node_means, self_repair, specificity_contrast,
                                       specificity_damage, summarise_damage)
 
@@ -126,6 +127,10 @@ def main() -> None:
     p.add_argument("--min-den", type=float, default=0.1,
                    help="drop pairs whose faithfulness denominator |Δ_base − Δ_all_ablated| is below this")
     p.add_argument("--only-above-noise", action="store_true", help="validate only nodes with above_noise=true")
+    p.add_argument("--node-types", default="am",
+                   help="which node types may be circuit members: 'a' heads, 'm' MLPs, 'am' both. "
+                        "Heads-only follows the IOI convention and carries ~60%% of the measured "
+                        "recovery here, while ablating far less of the model")
     p.add_argument("--specificity", action="store_true",
                    help="run both specificity controls: accept-pair contrast and clean-run damage")
     p.add_argument("--accept-pairs", default=None,
@@ -152,6 +157,9 @@ def main() -> None:
     # protected layers are not ablatable, so they cannot be circuit members either
     ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores,
                         excl | protect)
+    if set(args.node_types) != {'a', 'm'}:
+        ranked = [n for n in ranked if n[0] in set(args.node_types)]
+        print(f"node types {args.node_types!r}: {len(ranked)} nodes remain")
     if not ranked:
         raise SystemExit("empty circuit")
     if args.only_above_noise:
@@ -209,7 +217,7 @@ def main() -> None:
 
     result = dict(
         model=args.model, circuit=str(args.circuit), rank_by=args.rank_by, positions=pos,
-        exclude_layers=sorted(excl), protect_layers=sorted(protect),
+        exclude_layers=sorted(excl), protect_layers=sorted(protect), node_types=args.node_types,
         only_above_noise=args.only_above_noise, n_ablatable=len(universe),
         n_nodes=len(circuits[main_name]), n_pairs=len(pairs), mode=mode, seed=args.seed,
         circuit_sizes={k: len(v) for k, v in circuits.items()},
@@ -238,7 +246,7 @@ def main() -> None:
         rng = random.Random(args.seed)
         dmg_circuits = {"circuit": circuits[main_name]}
         for j in range(args.damage_randoms):
-            dmg_circuits[f"random_{j}"] = rng.sample(universe, len(circuits[main_name]))
+            dmg_circuits[f"random_{j}"] = matched_draw(universe, circuits[main_name], rng)
         damage = specificity_damage(model, dmg_pairs, dmg_circuits, means_by_region, mode,
                                     regions=regions, seed=args.seed)
         damage.to_csv(out / "damage.csv", index=False)
