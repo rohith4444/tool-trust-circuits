@@ -22,10 +22,16 @@ can be redefined without a GPU: see scripts/recompute_metrics.py.
 
 CIRCUIT SELECTION
 
---rank-by chooses which column of circuit.json orders the nodes. The default `eap` keeps
-the localization shortlist as-is. `rec_all` re-selects by measured recovery at all
-positions, which is where most of each node's effect sits (rec_all is ~2.4x rec_postout on
-ToRL) -- no re-localization needed, circuit.json already stores it.
+circuit.json holds only the shortlist (topn=50), so it cannot express a circuit larger
+than itself and re-ranking its 50 nodes to take the top 50 returns the same set.
+--node-scores reads node_scores.csv instead, which carries the EAP rank of every head and
+MLP (812 on ToRL), so the k-curve can reach k=200 without re-running the EAP screen. At
+k=50 with --rank-by eap it reproduces circuit.json exactly, which is what makes the curve
+comparable to the runs already on record.
+
+--rank-by picks the ordering column. `eap` is the attribution rank; `rec_all` and
+`rec_postout` are measured recovery and exist only in circuit.json, so they can only
+reorder the shortlist -- useful for the small end of the k-curve, not for selection.
 """
 from __future__ import annotations
 
@@ -44,12 +50,27 @@ from circuits.validate.ablate import (POSITIONS, ablate, collect_deltas, faithfu
 RANK_COLUMNS = ("eap", "rec_all", "rec_postout")
 
 
-def rank_nodes(circuit: dict, rank_by: str, only_above_noise: bool) -> list[dict]:
-    """circuit.json nodes, ordered. `eap` keeps the file's order (already the EAP rank)."""
+def rank_nodes(circuit: dict, rank_by: str, only_above_noise: bool,
+               node_scores: str | None = None) -> list[tuple[str, int, int]]:
+    """Nodes in selection order, best first.
+
+    From node_scores.csv when given -- every node in the model, so k is not capped at the
+    shortlist size. Otherwise from circuit.json, which holds only the shortlist. The two
+    agree on the first `topn` entries when rank_by is `eap`, by construction: the shortlist
+    is the EAP top-n.
+    """
+    if node_scores:
+        import pandas as pd
+        if rank_by != "eap":
+            raise SystemExit(f"--rank-by {rank_by} needs circuit.json (node_scores.csv has no "
+                             "patching columns); drop --node-scores or use --rank-by eap")
+        # to_dict, not itertuples: the file has a column literally named "index"
+        df = pd.read_csv(node_scores).sort_values("rank")
+        return [(r["type"], int(r["layer"]), int(r["index"])) for r in df.to_dict("records")]
     rows = [n for n in circuit["nodes"] if not only_above_noise or n["above_noise"]]
-    if rank_by == "eap":
-        return sorted(rows, key=lambda n: n["eap_rank"])
-    return sorted(rows, key=lambda n: -abs(float(n[rank_by])))
+    rows = sorted(rows, key=(lambda n: n["eap_rank"]) if rank_by == "eap"
+                  else (lambda n: -abs(float(n[rank_by]))))
+    return [(n["type"], int(n["layer"]), int(n["index"])) for n in rows]
 
 
 def main() -> None:
@@ -59,8 +80,11 @@ def main() -> None:
     p.add_argument("--zero", action="store_true", help="zero-ablation instead of mean-ablation")
     p.add_argument("--positions", default="postout", choices=POSITIONS,
                    help="postout = after the injected value (default); all = whole sequence (IOI convention)")
+    p.add_argument("--node-scores", default=None,
+                   help="node_scores.csv, to select from every node in the model rather than "
+                        "the topn shortlist in circuit.json (needed for k-curve points above topn)")
     p.add_argument("--rank-by", default="eap", choices=RANK_COLUMNS,
-                   help="which circuit.json column orders the nodes before --topk")
+                   help="ordering column; rec_all / rec_postout exist only in circuit.json")
     p.add_argument("--topk", type=int, default=None, help="keep the top k nodes (default: all in the file)")
     p.add_argument("--k-curve", default=None,
                    help="comma-separated circuit sizes to sweep, e.g. 10,25,50,100,200")
@@ -86,18 +110,20 @@ def main() -> None:
     pos = args.positions
 
     circuit = json.load(open(args.circuit))
-    ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise)
+    ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores)
     if not ranked:
         raise SystemExit("empty circuit")
-    as_node = lambda n: (n["type"], int(n["layer"]), int(n["index"]))          # noqa: E731
-    topk = args.topk or len(ranked)
-    circuits = {f"k{topk}": [as_node(n) for n in ranked[:topk]]}
+    # default topk is the shortlist size even when ranking over every node, so the main
+    # circuit stays the one the earlier runs reported on
+    topk = args.topk or min(len(ranked), circuit.get("topn", len(ranked)))
     main_name = f"k{topk}"
+    circuits = {main_name: ranked[:topk]}
     for k in ([int(x) for x in args.k_curve.split(",")] if args.k_curve else []):
         if k <= len(ranked):
-            circuits.setdefault(f"k{k}", [as_node(n) for n in ranked[:k]])
+            circuits.setdefault(f"k{k}", ranked[:k])
         else:
-            print(f"skipping k={k}: circuit.json has only {len(ranked)} nodes")
+            src = args.node_scores or args.circuit
+            print(f"skipping k={k}: {src} has only {len(ranked)} nodes")
 
     model = load_model(args.model, device=args.device, dtype=args.dtype)
     _, pairs = get_pairs(model, args)
