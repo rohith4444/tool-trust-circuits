@@ -22,16 +22,25 @@ can be redefined without a GPU: see scripts/recompute_metrics.py.
 
 CIRCUIT SELECTION
 
-circuit.json holds only the shortlist (topn=50), so it cannot express a circuit larger
-than itself and re-ranking its 50 nodes to take the top 50 returns the same set.
---node-scores reads node_scores.csv instead, which carries the EAP rank of every head and
-MLP (812 on ToRL), so the k-curve can reach k=200 without re-running the EAP screen. At
-k=50 with --rank-by eap it reproduces circuit.json exactly, which is what makes the curve
-comparable to the runs already on record.
+--only-above-noise is the confirmation step, and leaving it off is what produced the
+specificity failure. EAP-IG is an estimate; activation patching is the test, and it
+already ran on every shortlisted node. On ToRL it confirmed 37 of 50: m0, a0.h3, m1 and
+m5 recover 0.000-0.001 of Delta at post-output against a noise floor of 0.0011, so
+patching had marked them false positives from the screen. Validating all 50 anyway put
+the model's MLP backbone (23 of ToRL's 28 MLPs) into the "circuit", which is why ablating
+it destroyed ordinary text prediction.
 
---rank-by picks the ordering column. `eap` is the attribution rank; `rec_all` and
-`rec_postout` are measured recovery and exist only in circuit.json, so they can only
-reorder the shortlist -- useful for the small end of the k-curve, not for selection.
+--protect-layers keeps layer 0 out of the ablation entirely -- neither circuit nor
+complement. Ablating MLP0 removes the input, not a mechanism.
+
+--rank-by picks the ordering column. `eap` is the attribution rank, `rec_postout` the
+measured recovery; they disagree sharply (attribution puts m0 first, patching puts it at
+zero), so prefer rec_postout once the shortlist is confirmed.
+
+--node-scores reads node_scores.csv instead of circuit.json, which carries the EAP rank of
+every head and MLP (812 on ToRL) so the k-curve can exceed the shortlist size. Those nodes
+have no patching columns, so they are unconfirmed by construction -- do not combine it
+with claims about the circuit.
 """
 from __future__ import annotations
 
@@ -41,10 +50,10 @@ import random
 from pathlib import Path
 
 from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, write_json
-from circuits.hooks import all_nodes, set_seed
+from circuits.hooks import set_seed
 from circuits.localize.delta import run_delta
 from circuits.models.load import load_model
-from circuits.validate.ablate import (POSITIONS, ablate, collect_deltas, faithfulness, k_curve,
+from circuits.validate.ablate import (POSITIONS, ablatable, ablate, collect_deltas, faithfulness, k_curve,
                                       necessity, node_means, self_repair, specificity_contrast,
                                       specificity_damage, summarise_damage)
 
@@ -98,6 +107,11 @@ def main() -> None:
                         "the topn shortlist in circuit.json (needed for k-curve points above topn)")
     p.add_argument("--rank-by", default="eap", choices=RANK_COLUMNS,
                    help="ordering column; rec_all / rec_postout exist only in circuit.json")
+    p.add_argument("--protect-layers", default="0",
+                   help="layers never ablated and never counted as circuit (default 0). MLP0 "
+                        "turns token ids into what the rest of the model reads, so ablating it "
+                        "removes the input rather than a mechanism; Wang et al. treat it as part "
+                        "of the extended embedding. Pass '' to disable")
     p.add_argument("--exclude-layers", default=None,
                    help="comma-separated layers to drop before ranking, e.g. 0. Attribution "
                         "ranks layer 0 first because every path runs through it; ablating MLP0 "
@@ -134,9 +148,17 @@ def main() -> None:
 
     circuit = json.load(open(args.circuit))
     excl = {int(x) for x in args.exclude_layers.split(",")} if args.exclude_layers else set()
-    ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores, excl)
+    protect = {int(x) for x in args.protect_layers.split(",")} if args.protect_layers else set()
+    # protected layers are not ablatable, so they cannot be circuit members either
+    ranked = rank_nodes(circuit, args.rank_by, args.only_above_noise, args.node_scores,
+                        excl | protect)
     if not ranked:
         raise SystemExit("empty circuit")
+    if args.only_above_noise:
+        print(f"confirmed nodes only (patching above noise floor): {len(ranked)} of "
+              f"{len(circuit['nodes'])} shortlisted")
+    if protect:
+        print(f"protecting layers {sorted(protect)}: never ablated, never circuit")
     if excl:
         print(f"excluding layers {sorted(excl)}: {len(ranked)} nodes remain")
     # default topk is the shortlist size even when ranking over every node, so the main
@@ -165,12 +187,13 @@ def main() -> None:
     d_empty = ablate(model, p0, [], means, mode, pos)
     if abs(d_empty - d_base) > 1e-6:
         raise AssertionError(f"ablate(empty) {d_empty} != baseline {d_base}")
-    d_all = ablate(model, p0, all_nodes(model.cfg), means, mode, pos)
+    universe = ablatable(model.cfg, protect)
+    d_all = ablate(model, p0, universe, means, mode, pos)
     checks = dict(ablate_empty_equals_baseline=True, delta_base=d_base, delta_all_ablated=d_all,
                   floor_over_signal=abs(d_all) / (abs(d_base) + 1e-8))
 
     df = collect_deltas(model, pairs, circuits, means, mode=mode, positions=pos,
-                        k_random=args.k_random, seed=args.seed, main=main_name)
+                        k_random=args.k_random, seed=args.seed, main=main_name, protect=protect)
     df.to_csv(out / "validation_pairs.csv", index=False)
 
     # faithfulness(all nodes) == 1 and faithfulness(empty) == 0 are identities of the
@@ -178,7 +201,7 @@ def main() -> None:
     ident = df.copy()
     ident.attrs.update(df.attrs)
     ident["circ__id"] = ident["base"]
-    ident.attrs["sizes"] = {**ident.attrs["sizes"], "_id": len(all_nodes(model.cfg))}
+    ident.attrs["sizes"] = {**ident.attrs["sizes"], "_id": len(universe)}
     f_all = faithfulness(ident, "_id", args.min_den)["faithfulness"]
     if abs(f_all - 1.0) > 1e-6:
         raise AssertionError(f"faithfulness(all nodes) = {f_all} != 1")
@@ -186,7 +209,8 @@ def main() -> None:
 
     result = dict(
         model=args.model, circuit=str(args.circuit), rank_by=args.rank_by, positions=pos,
-        exclude_layers=sorted(excl),
+        exclude_layers=sorted(excl), protect_layers=sorted(protect),
+        only_above_noise=args.only_above_noise, n_ablatable=len(universe),
         n_nodes=len(circuits[main_name]), n_pairs=len(pairs), mode=mode, seed=args.seed,
         circuit_sizes={k: len(v) for k, v in circuits.items()},
         necessity=necessity(df, main_name),
@@ -211,7 +235,6 @@ def main() -> None:
         means_by_region = {
             r: (means if r == pos else node_means(model, dmg_pairs, out / f"means_{r}.pt", positions=r))
             for r in regions}
-        universe = all_nodes(model.cfg)
         rng = random.Random(args.seed)
         dmg_circuits = {"circuit": circuits[main_name]}
         for j in range(args.damage_randoms):

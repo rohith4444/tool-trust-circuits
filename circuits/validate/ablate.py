@@ -111,10 +111,24 @@ def ablate(model, pair, nodes, means, mode: str = "mean", positions: str = "post
 
 # --------------------------------------------------------------------------- collection
 
+def ablatable(cfg, protect: set[int] | None = None) -> list[Node]:
+    """Every node that may be ablated: all of them, minus the protected layers.
+
+    Layer 0 is protected by convention. MLP0 turns token ids into the representation
+    everything downstream reads; mean-ablating it does not remove a mechanism, it removes
+    the input. Faithfulness makes this concrete -- ablate the complement with m0 in it and
+    the circuit-only run has no text to work from, so the number measures nothing (ToRL:
+    0.412 with m0 kept, 0.069 with it ablated). Wang et al. treat MLP0 as part of the
+    extended embedding for the same reason: never ablated, never counted as circuit.
+    """
+    protect = protect or set()
+    return [n for n in all_nodes(cfg) if n[1] not in protect]
+
+
 @torch.no_grad()
 def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: str = "mean",
                    positions: str = "postout", k_random: int = 20, seed: int = 0,
-                   main: str | None = None) -> pd.DataFrame:
+                   main: str | None = None, protect: set[int] | None = None) -> pd.DataFrame:
     """Every Δ the metrics need, one row per pair. This is the only GPU-bound part.
 
     `circuits` maps a name to a node list; the k-curve passes {"k10": [...], "k50": [...]}.
@@ -132,7 +146,7 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
     main = main or next(iter(circuits))
     if main not in circuits:
         raise KeyError(f"main circuit {main!r} not in {sorted(circuits)}")
-    universe = all_nodes(model.cfg)
+    universe = ablatable(model.cfg, protect)
     rng = random.Random(seed)
     draws = [rng.sample(universe, len(circuits[main])) for _ in range(k_random)]
     complements = {name: [n for n in universe if n not in set(nodes)] for name, nodes in circuits.items()}
@@ -163,7 +177,8 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
                      (len(pairs) - done) * el / done / 60)
     df = pd.DataFrame(rows)
     df.attrs.update(main=main, k_random=k_random, mode=mode, positions=positions,
-                    sizes={k: len(v) for k, v in circuits.items()})
+                    sizes={k: len(v) for k, v in circuits.items()},
+                    protect=sorted(protect or []), n_ablatable=len(universe))
     return df
 
 
