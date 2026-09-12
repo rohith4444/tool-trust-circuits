@@ -53,7 +53,8 @@ from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, wri
 from circuits.hooks import set_seed
 from circuits.localize.delta import run_delta
 from circuits.models.load import load_model
-from circuits.validate.ablate import (POSITIONS, ablatable, ablate, collect_deltas, faithfulness, k_curve,
+from circuits.validate.ablate import (POSITIONS, ablatable, ablate, collect_deltas, faithfulness,
+                                      faithfulness_random, k_curve,
                                       matched_draw,
                                       necessity, node_means, self_repair, specificity_contrast,
                                       specificity_damage, summarise_damage)
@@ -125,7 +126,11 @@ def main() -> None:
     p.add_argument("--topk", type=int, default=None, help="keep the top k nodes (default: all in the file)")
     p.add_argument("--k-curve", default=None,
                    help="comma-separated circuit sizes to sweep, e.g. 10,25,50,100,200")
-    p.add_argument("--k-random", type=int, default=20)
+    p.add_argument("--k-random", type=int, default=20,
+                   help="random node sets, matched on composition, used as the necessity null")
+    p.add_argument("--faith-randoms", type=int, default=5,
+                   help="how many of those sets also get the keep-only-these condition, the "
+                        "faithfulness null (Shi et al. 2024). 0 disables")
     p.add_argument("--limit", type=int, default=None, help="use only the first N pairs (for timing runs)")
     p.add_argument("--max-iters", type=int, default=3)
     p.add_argument("--z", type=float, default=2.0, help="self-repair spike threshold (z-score of DLA change)")
@@ -209,7 +214,7 @@ def main() -> None:
 
     df = collect_deltas(model, pairs, circuits, means, mode=mode, positions=pos,
                         k_random=args.k_random, seed=args.seed, main=main_name, protect=protect,
-                        protect_types=args.protect_types)
+                        protect_types=args.protect_types, faith_randoms=args.faith_randoms)
     df.to_csv(out / "validation_pairs.csv", index=False)
 
     # faithfulness(all nodes) == 1 and faithfulness(empty) == 0 are identities of the
@@ -232,6 +237,7 @@ def main() -> None:
         circuit_sizes={k: len(v) for k, v in circuits.items()},
         necessity=necessity(df, main_name),
         faithfulness=faithfulness(df, main_name, args.min_den),
+        faithfulness_random=faithfulness_random(df, args.min_den),
         checks=checks,
     )
     if not args.no_self_repair:
@@ -280,8 +286,12 @@ def main() -> None:
     print(f"  circuit          {result['n_nodes']} nodes, ranked by {args.rank_by}, ablated at {pos}")
     print(f"  necessity        collapse {n['collapse']:.3f} (median {n['collapse_median']:.3f}) "
           f"vs random p95 {n['random_collapse_p95']:.3f}  -> above_random={n['above_random']}")
+    fr = result["faithfulness_random"]
     print(f"  faithfulness     {f['faithfulness']:.3f} (median of per-pair, IQR {f['iqr']})  "
           f"pooled_signed {f['pooled_signed']:.3f}")
+    if fr.get("n"):
+        print(f"                   random circuits of the same size: mean {fr['mean']:.3f}, "
+              f"max {fr['max']:.3f} over {fr['n']} draws")
     print(f"  denominator sign +{f['n_den_positive']} / -{f['n_den_negative']}, {f['n_excluded']} excluded")
     if "specificity" in result:
         d, c = result["specificity"]["clean_run_damage"], result["specificity"]["accept_contrast"]

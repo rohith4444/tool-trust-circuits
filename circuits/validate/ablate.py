@@ -164,7 +164,7 @@ def ablatable(cfg, protect: set[int] | None = None, protect_types: str = "") -> 
 def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: str = "mean",
                    positions: str = "postout", k_random: int = 20, seed: int = 0,
                    main: str | None = None, protect: set[int] | None = None,
-                   protect_types: str = "") -> pd.DataFrame:
+                   protect_types: str = "", faith_randoms: int = 0) -> pd.DataFrame:
     """Every Δ the metrics need, one row per pair. This is the only GPU-bound part.
 
     `circuits` maps a name to a node list; the k-curve passes {"k10": [...], "k50": [...]}.
@@ -187,8 +187,15 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
     # matched on head/MLP composition -- see matched_draw
     draws = [matched_draw(universe, circuits[main], rng) for _ in range(k_random)]
     complements = {name: [n for n in universe if n not in set(nodes)] for name, nodes in circuits.items()}
+    # faithfulness needs a null too: keep a RANDOM set of the circuit's size and ablate the
+    # rest. Without it, "the circuit alone recovers 37% of Delta" has no reference point --
+    # the same gap that made specificity's 0.012 unreadable. It matters most under
+    # protect_types="m", where the circuit-only run still has the whole MLP stack and is
+    # missing only 736 of 756 heads, so random heads may recover a great deal by themselves.
+    # Shi et al. (2024) use same-size random circuits as the null for exactly this.
+    faith_comp = [[n for n in universe if n not in set(d)] for d in draws[:faith_randoms]]
 
-    per_pair = 2 + 2 * len(circuits) + k_random
+    per_pair = 2 + 2 * len(circuits) + k_random + faith_randoms
     log.info("collect_deltas: %d pairs x %d forwards = %d, positions=%s",
              len(pairs), per_pair, len(pairs) * per_pair, positions)
     t0 = time.time()
@@ -205,6 +212,8 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
             row[f"circ_{name}"] = ablate(model, pair, complements[name], means, mode, positions)
         for j, d in enumerate(draws):
             row[f"rand_{j}"] = ablate(model, pair, d, means, mode, positions)
+        for j, comp in enumerate(faith_comp):
+            row[f"faithrand_{j}"] = ablate(model, pair, comp, means, mode, positions)
         rows.append(row)
         done = i + 1
         if done % 5 == 0 or done == len(pairs):
@@ -215,7 +224,8 @@ def collect_deltas(model, pairs, circuits: dict[str, list[Node]], means, mode: s
     df = pd.DataFrame(rows)
     df.attrs.update(main=main, k_random=k_random, mode=mode, positions=positions,
                     sizes={k: len(v) for k, v in circuits.items()},
-                    protect=sorted(protect or []), protect_types=protect_types, n_ablatable=len(universe))
+                    protect=sorted(protect or []), protect_types=protect_types,
+                    n_ablatable=len(universe), faith_randoms=len(faith_comp))
     return df
 
 
@@ -309,6 +319,26 @@ def faithfulness(df: pd.DataFrame, name: str | None = None, min_den: float = 0.1
         n_excluded=int((~keep).sum()), min_den=min_den,
         circuit_size=df.attrs.get("sizes", {}).get(name), n_pairs=len(df),
     )
+
+
+def faithfulness_random(df: pd.DataFrame, min_den: float = 0.1) -> dict:
+    """Faithfulness of same-size RANDOM circuits -- the null for faithfulness.
+
+    Same formula as faithfulness(), evaluated on each `faithrand_j` column: keep a random
+    set of the circuit's size, ablate the rest. The circuit's own figure is only a result
+    insofar as it exceeds this.
+    """
+    base, alls = df["base"].to_numpy(), df["all_abl"].to_numpy()
+    den = base - alls
+    keep = np.abs(den) > min_den
+    vals = []
+    for col in [c for c in df.columns if c.startswith("faithrand_")]:
+        num = df[col].to_numpy() - alls
+        vals.append(float(np.nanmedian(np.where(keep, num / np.where(keep, den, 1.0), np.nan))))
+    if not vals:
+        return dict(n=0)
+    return dict(n=len(vals), dist=vals, mean=float(np.mean(vals)),
+                p95=float(np.percentile(vals, 95)), max=float(np.max(vals)))
 
 
 def k_curve(df: pd.DataFrame, min_den: float = 0.1) -> pd.DataFrame:
