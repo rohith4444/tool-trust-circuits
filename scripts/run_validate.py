@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 from pathlib import Path
 
 from circuits.cli import add_common, get_pairs, push_outputs, setup_logging, write_json
@@ -116,6 +117,12 @@ def main() -> None:
     p.add_argument("--accept-pairs", default=None,
                    help="pair file for the accept control (default: --pairs, filtered to label=accept)")
     p.add_argument("--max-accept", type=int, default=150, help="cap on accept-control pairs")
+    p.add_argument("--damage-regions", default="preout,postout",
+                   help="regions to measure collateral damage in; preout is the control "
+                        "(before any tool result exists, so nothing there is tool assimilation)")
+    p.add_argument("--damage-randoms", type=int, default=3,
+                   help="random node sets of the circuit's size, the damage baseline")
+    p.add_argument("--max-damage", type=int, default=200, help="cap on pairs used for damage")
     p.add_argument("--no-self-repair", action="store_true")
     args = p.parse_args()
     setup_logging(args.verbose)
@@ -195,8 +202,22 @@ def main() -> None:
         result["k_curve"] = curve.to_dict("records")
 
     if args.specificity:
-        # variant 2 first: it reuses the pairs and means already in memory
-        damage = specificity_damage(model, pairs, circuits[main_name], means, mode, pos, seed=args.seed)
+        # variant 2: damage by region, against random sets of the same size. `preout` is
+        # the control region -- before any tool result exists, so nothing there is tool
+        # assimilation. Means are rebuilt per region: post-output means are not the right
+        # replacement for pre-output activations, and using them would itself cause damage.
+        dmg_pairs = pairs[:args.max_damage]
+        regions = tuple(args.damage_regions.split(","))
+        means_by_region = {
+            r: (means if r == pos else node_means(model, dmg_pairs, out / f"means_{r}.pt", positions=r))
+            for r in regions}
+        universe = all_nodes(model.cfg)
+        rng = random.Random(args.seed)
+        dmg_circuits = {"circuit": circuits[main_name]}
+        for j in range(args.damage_randoms):
+            dmg_circuits[f"random_{j}"] = rng.sample(universe, len(circuits[main_name]))
+        damage = specificity_damage(model, dmg_pairs, dmg_circuits, means_by_region, mode,
+                                    regions=regions, seed=args.seed)
         damage.to_csv(out / "damage.csv", index=False)
         spec = dict(clean_run_damage=summarise_damage(damage))
 
@@ -224,7 +245,12 @@ def main() -> None:
     print(f"  denominator sign +{f['n_den_positive']} / -{f['n_den_negative']}, {f['n_excluded']} excluded")
     if "specificity" in result:
         d, c = result["specificity"]["clean_run_damage"], result["specificity"]["accept_contrast"]
-        print(f"  specificity      clean-run top-1 agreement {d['top1_agreement']:.3f}, KL {d['kl_mean']:.4f}")
+        print("  specificity      clean-run top-1 agreement (higher = less damage)")
+        print(f"                   {'region':<10}{'circuit':>10}{'random':>10}{'ratio':>8}")
+        for region, per in d.items():
+            print(f"                   {region:<10}{per['circuit']['top1_agreement']:>10.3f}"
+                  f"{per.get('random_mean_top1', float('nan')):>10.3f}"
+                  f"{per.get('circuit_over_random', float('nan')):>8.2f}")
         print(f"                   accept collapse {c['collapse_accept']:.3f} vs override "
               f"{c['collapse_override']:.3f} (ratio {c['ratio']:.2f})")
     if not args.no_push:

@@ -40,7 +40,7 @@ from ..localize.roles import dla_terms
 
 log = logging.getLogger(__name__)
 
-POSITIONS = ("postout", "all")
+POSITIONS = ("postout", "preout", "all")
 EPS = 1e-6
 
 
@@ -51,9 +51,17 @@ def positions_of(pair, which: str = "postout") -> list[int]:
     decides what to do with what it just read. `all` is the whole sequence, the IOI
     convention, which also covers the value's own tokens and the prefix that produced
     the model's own answer.
+
+    `preout` is everything before the injected value: the problem statement, the model's
+    reasoning, and its code, up to the opening fence. No tool result exists there yet, so
+    nothing in that region is tool assimilation -- which is what makes it the control
+    region for specificity. A circuit that only decides whether to trust a tool should be
+    close to inert there.
     """
     if which == "postout":
         return list(pair.post_output)
+    if which == "preout":
+        return list(range(pair.output_span[0]))
     if which == "all":
         return list(range(pair.T))
     raise ValueError(f"unknown positions {which!r}, expected one of {POSITIONS}")
@@ -290,58 +298,82 @@ def specificity_contrast(override: dict, accept: dict) -> dict:
 
 
 @torch.no_grad()
-def specificity_damage(model, pairs, circuit: list[Node], means, mode: str = "mean",
-                       positions: str = "postout", max_positions: int = 128,
-                       seed: int = 0) -> pd.DataFrame:
-    """Variant 2: ablate the circuit on the CLEAN run and measure collateral damage.
+def specificity_damage(model, pairs, circuits: dict[str, list[Node]],
+                       means_by_region: dict[str, dict], mode: str = "mean",
+                       regions: tuple[str, ...] = ("preout", "postout"),
+                       max_positions: int = 128, seed: int = 0) -> pd.DataFrame:
+    """Variant 2: collateral damage from ablating the circuit, by region and against random.
 
-    On the clean run the injected value is the ground truth, so there is nothing to
-    distrust and the circuit should have no work to do. Ablating it there should barely
-    move the model's next-token distribution. If top-1 agreement falls, the circuit is not
-    a trust mechanism -- it is general machinery, and necessity was measuring breakage.
+    WHAT THE EARLIER VERSION GOT WRONG
 
-    Per pair: top-1 agreement and mean KL(base || ablated) over up to `max_positions`
-    sampled post-output positions, plus the shift in Δ itself. Logits are sliced to the
-    sampled positions immediately -- a full [1, T, 152064] tensor is held only one at a
-    time.
+    It ablated at post-output positions of the clean run and read a top-1 agreement of
+    0.012 as a specificity failure. But post-output is where the model assimilates the
+    tool result and writes its answer -- the circuit's own job. Removing the conflict does
+    not make that region unrelated work, so the test asked whether the circuit matters for
+    what the circuit does, and the answer was never going to be no.
+
+    It also had no baseline. Necessity means something because random same-size sets
+    collapse |Delta| by 0.06 against the circuit's 0.78. Damage had nothing to compare to,
+    so 0.012 was uninterpretable: mean-ablating any 50 well-scoring components across
+    hundreds of positions may drive top-1 to zero whatever they are.
+
+    Both are fixed here. `regions` contrasts `preout` -- problem statement, reasoning and
+    code, before any tool result exists -- with `postout`, and `circuits` carries random
+    node sets alongside the real one. The claim this can support is that damage is
+    concentrated at post-output and exceeds random there, not that ablating the circuit
+    harms nothing.
+
+    Run on clean ids: the control asks what the circuit does when there is nothing to
+    distrust. Logits are sliced to the sampled positions immediately, so only one full
+    [1, T, d_vocab] tensor is alive at a time.
     """
     rng = random.Random(seed)
-    means_dev = {k: v.to(model.cfg.device) for k, v in means.items()}
+    dev = {r: {k: v.to(model.cfg.device) for k, v in m.items()} for r, m in means_by_region.items()}
     rows = []
-    for pair in pairs:
-        pos = positions_of(pair, positions)
-        sample = sorted(rng.sample(pos, min(max_positions, len(pos))))
+    for i, pair in enumerate(pairs):
         ids = to_batch(model, pair.clean_ids)
-
-        def _at(hooks, pair=pair, ids=ids, pos=pos, sample=sample):
-            fwd = replace_hooks(circuit, pos, mean_source(means_dev, pair.T, mode)) if hooks else []
-            lg = model.run_with_hooks(ids, fwd_hooks=fwd)
-            d = delta(lg, pair.own_tok, pair.tool_tok, pair.measure_pos).item()
-            return lg[0, sample].float(), d
-
-        base_lg, d_base = _at(False)
-        abl_lg, d_abl = _at(True)
-        lp_base = torch.log_softmax(base_lg, dim=-1)
-        lp_abl = torch.log_softmax(abl_lg, dim=-1)
-        kl = (lp_base.exp() * (lp_base - lp_abl)).sum(-1)
-        rows.append(dict(
-            pair_id=pair.id, n_sampled=len(sample),
-            top1_agreement=float((base_lg.argmax(-1) == abl_lg.argmax(-1)).float().mean()),
-            kl_mean=float(kl.mean()), kl_p95=float(kl.quantile(0.95)),
-            delta_clean_base=d_base, delta_clean_ablated=d_abl,
-        ))
-        del base_lg, abl_lg, lp_base, lp_abl
+        for region in regions:
+            pos = positions_of(pair, region)
+            if len(pos) < 2:
+                continue                       # nothing to measure (e.g. a truncated prefix)
+            sample = sorted(rng.sample(pos, min(max_positions, len(pos))))
+            base_lg = model(ids)[0, sample].float()
+            lp_base = torch.log_softmax(base_lg, dim=-1)
+            top_base = base_lg.argmax(-1)
+            p_base = lp_base.exp()
+            for name, nodes in circuits.items():
+                fwd = replace_hooks(nodes, pos, mean_source(dev[region], pair.T, mode))
+                lg = model.run_with_hooks(ids, fwd_hooks=fwd)[0, sample].float()
+                kl = (p_base * (lp_base - torch.log_softmax(lg, dim=-1))).sum(-1)
+                rows.append(dict(
+                    pair_id=pair.id, circuit=name, region=region, n_sampled=len(sample),
+                    top1_agreement=float((top_base == lg.argmax(-1)).float().mean()),
+                    kl_mean=float(kl.mean()), kl_p95=float(kl.quantile(0.95)),
+                ))
+                del lg, kl
+            del base_lg, lp_base, p_base, top_base
+        if (i + 1) % 25 == 0:
+            log.info("specificity_damage: %d/%d pairs", i + 1, len(pairs))
     return pd.DataFrame(rows)
 
 
 def summarise_damage(df: pd.DataFrame) -> dict:
-    return dict(
-        top1_agreement=float(df["top1_agreement"].mean()),
-        top1_agreement_median=float(df["top1_agreement"].median()),
-        kl_mean=float(df["kl_mean"].mean()), kl_p95=float(df["kl_p95"].mean()),
-        clean_delta_shift=float((df["delta_clean_ablated"] - df["delta_clean_base"]).abs().mean()),
-        n_pairs=len(df),
-    )
+    """{region: {circuit: stats}}, plus the circuit-over-random ratio that is the result."""
+    out: dict[str, dict] = {}
+    for region, g in df.groupby("region"):
+        per = {}
+        for name, gg in g.groupby("circuit"):
+            per[name] = dict(top1_agreement=float(gg["top1_agreement"].mean()),
+                             top1_agreement_median=float(gg["top1_agreement"].median()),
+                             kl_mean=float(gg["kl_mean"].mean()), n_pairs=int(gg["pair_id"].nunique()))
+        rand = [v["top1_agreement"] for k, v in per.items() if k.startswith("random")]
+        if "circuit" in per and rand:
+            r = float(np.mean(rand))
+            per["random_mean_top1"] = r
+            # <1 means the circuit damages this region more than random sets of its size.
+            per["circuit_over_random"] = float(per["circuit"]["top1_agreement"] / r) if r else float("nan")
+        out[region] = per
+    return out
 
 
 # --------------------------------------------------------------------------- self-repair
