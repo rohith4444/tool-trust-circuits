@@ -34,6 +34,14 @@ mkdir -p "$HF_HOME" "$UV_CACHE_DIR" "$TIR_OUTPUTS"
 #   uv pip install --python $VENV_GEN -r envs/gen.lock.txt
 export VENV_GEN=/root/venv-gen
 
+# --- analysis venv ----------------------------------------------------------
+# TransformerLens + EAP-IG, for every circuits/ stage. Same reasoning as VENV_GEN:
+# container disk, wiped on stop, rebuilt with
+#   uv venv $VENV_ANALYSIS --python 3.11
+#   uv pip install --python $VENV_ANALYSIS -r envs/analysis.txt -e .
+# Kept separate from VENV_GEN because the two pin conflicting torch versions.
+export VENV_ANALYSIS=/root/venv-analysis
+
 # --- github -----------------------------------------------------------------
 # The durable copy of the key is on /workspace, but SSH refuses to use it there:
 # MooseFS ignores chmod, so the key stays world-readable and SSH skips it. Copy
@@ -63,7 +71,8 @@ git config --global user.email "rohithreddy24242@gmail.com" 2>/dev/null
 echo "HF_HOME      = $HF_HOME"
 echo "UV_CACHE_DIR = $UV_CACHE_DIR"
 echo "TIR_OUTPUTS  = $TIR_OUTPUTS"
-echo "VENV_GEN     = $VENV_GEN"
+echo "VENV_GEN     = $VENV_GEN $([ -x $VENV_GEN/bin/python ] && echo '(built)' || echo '(not built)')"
+echo "VENV_ANALYSIS= $VENV_ANALYSIS $([ -x $VENV_ANALYSIS/bin/python ] && echo '(built)' || echo '(not built)')"
 # Never interpolate $HF_TOKEN itself here -- ${HF_TOKEN:-not set} expands to the
 # token value when it is set, which prints the secret to the terminal.
 echo "HF_TOKEN     = $([ -n "$HF_TOKEN" ] && echo ok || echo missing)"

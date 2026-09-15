@@ -13,10 +13,13 @@ from .data.pairs import build_pairs, load_examples
 RESULTS_REPO = "tool-trust-circuits/tool-trust-results"
 
 
-def add_common(p: argparse.ArgumentParser, model_arg: bool = True) -> None:
+def add_common(p: argparse.ArgumentParser, model_arg: bool = True, pairs_arg: bool = True) -> None:
     if model_arg:
         p.add_argument("--model", required=True, help="registry name (torl, simpletir, demyagent, base) or HF repo id")
-    p.add_argument("--pairs", required=True, help="jsonl pair file: a docs/DATASET.md file (pairs/<model>_<split>.jsonl) or the segment format in circuits/data/pairs.py::PAIR_FILE_SCHEMA")
+    # pairs_arg=False for stages that read generated traces rather than the pair corpus
+    # (run_regenerate.py), where a required --pairs would fail at argument parsing.
+    if pairs_arg:
+        p.add_argument("--pairs", required=True, help="jsonl pair file: a docs/DATASET.md file (pairs/<model>_<split>.jsonl) or the segment format in circuits/data/pairs.py::PAIR_FILE_SCHEMA")
     p.add_argument("--label", default=None, help="keep only pairs with this label (accept|override; dataset files map tool_case -> label)")
     p.add_argument("--max-tokens", type=int, default=None, help="left-truncate pairs longer than this")
     p.add_argument("--seed", type=int, default=0)

@@ -14,7 +14,22 @@ transformer-lens==2.18.0
 transformers>=4.57,<5
 torch>=2.6
 numpy<2; python_version < "3.13"
-pandas
+
+# transformer_lens imports datasets, which is otherwise unpinned and resolved to 2.14.4
+# on a fresh machine -- that version uses pa.PyExtensionType, removed in pyarrow 15, so
+# `import transformer_lens` dies before anything runs. Upgrading it unpinned then pulls
+# huggingface_hub 1.x, which transformers<5 refuses. Both bounds are needed.
+datasets>=2.16,<4
+huggingface_hub>=0.34,<1.0
+pandas>=2,<3
+
+# The TIR sandbox and grader, for scripts/run_regenerate.py: it re-runs the tool loop, so
+# it executes model-written Python and grades the result the same way generation did.
+Pebble
+timeout-decorator
+sympy
+latex2sympy2
+word2number
 
 # EAP-IG is not on PyPI and the package name is `eap` (an unrelated `eap` exists on
 # PyPI -- do not `pip install eap`). Its scorers hardcode device='cuda', so the EAP
