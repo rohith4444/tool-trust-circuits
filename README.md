@@ -4,41 +4,8 @@ Mechanistic analysis of **tool trust** in tool-integrated reasoning (TIR) models
 inside the model the decision is made to accept a returned tool output or override it with
 the model's own earlier answer, and whether that decision can be steered.
 
-The failure this studies is *Tool Ignored*, named by ATTC
-([Xu et al., arXiv:2604.08281](https://arxiv.org/abs/2604.08281)): a code interpreter
-returns the correct value, it contradicts what the model already reasoned, and the model
-keeps its own wrong answer. ATTC fixes it with an external controller. We locate the
-decision inside the network instead.
-
 Code for the workshop paper *Localizing and Steering a Tool-Trust Circuit in
 Tool-Integrated Reasoning Agents* (NeurIPS 2026 EvoRobust, non-archival).
-
-## What it found
-
-On ToRL-7B, SimpleTIR-7B and DemyAgent-4B, the decision is carried by **14-20 late-layer
-attention heads**, 1-3% of each model's components. Measured against controls matched to
-the circuit in size *and* head-to-MLP composition, the circuit is **necessary** for the
-decision, **specific** to it, and **partially sufficient** (faithfulness 0.19-0.33). ToRL
-and SimpleTIR, localized independently, share 9 of their 12 highest-recovery heads.
-Scaling those heads, or adding a difference-of-means steering direction, shifts the
-decision toward the tool on held-out traces where the model really did override a correct
-result, without adding a token or changing the prompt.
-
-Full numbers and the ablation-scope sensitivity table: [docs/VALIDATION.md](docs/VALIDATION.md).
-
-## What it does not show
-
-Stated here because it is the first thing to fix, not because it is hidden:
-
-- **No end-task result.** Activation hooks need TransformerLens, an unintervened
-  TransformerLens run reproduces our vLLM traces on only 77% of problems, and conflict
-  cases are too rare to rate on a subsample. See `docs/INTERVENTION.md`.
-- **Δ is a logit-level preference, not the emitted answer.** On 10 of 17 held-out
-  Tool-Ignored traces the model already favours the tool at the readout and still writes
-  its own answer.
-- **Node-level, not edge-level.** Components are patched, connections are not, so this is
-  a validated set of heads rather than a wiring diagram.
-- One corruption operator, one seed per model, and 17/11/14 held-out problems.
 
 ## Pipeline
 
@@ -96,37 +63,6 @@ what:
 | CKA between models | `results/final_universality/cka_*.npy` |
 | Head scaling, α=4 | `results/intervene/final_torl_scale/` |
 | Steering, layer 18 | `results/intervene/final_torl_steer/` |
-
-**One artifact does not match the paper, by design.**
-`results/final_universality/overlap.json` reports Jaccard 0.724 over 42 of 50 common
-nodes. That is `run_universality.py` comparing the raw EAP-IG shortlists, which include
-MLPs and layer 0. The paper reports overlap over *patching-confirmed* non-layer-0 heads:
-16 of 23 shared, Jaccard 0.70, and 9 of the top 12 by recovery. `paper_numbers.py` derives
-that from `circuit.json` and prints both, so the discrepancy is visible rather than hidden.
-Use the confirmed-head figure; it is the one the circuit is defined by.
-
-`final_*` directories are the runs the paper reports. The per-model directories
-(`results/torl/` and so on) are the localization stage those runs consumed. Earlier
-exploratory runs are not included.
-
-## Three things worth knowing before reading the code
-
-**Δ is read at the divergence token, and Z never enters it.** Δ = logit(Y) − logit(X) at
-the first position where the ground truth Y and the model's own answer X differ, with the
-shared prefix teacher-forced. The same two token ids are used in both the clean and the
-corrupted run. The fabricated wrong value Z changes what the model *sees*, never what is
-measured.
-
-**A corrupted value that matches Y at the readout is inert.** Both runs then predict the
-same token and Δ is identical in both. Our first build perturbed the last digit, which
-fails this for 80% of pairs; the corpus was rebuilt to perturb at the divergence index
-instead. `scripts/check_z_contrast.py` is the check.
-
-**Controls must match composition, not just size.** A model has ~28 MLPs against ~784
-heads, so a uniform random set of a circuit's size contains almost no MLPs. Measured
-against unmatched controls our necessity margin read 10.8×; matched, it read 1.1×. The
-same correction applies to faithfulness and specificity, and each one changed a reported
-result. `circuits/validate/ablate.py::matched_draw`.
 
 ## Layout
 
