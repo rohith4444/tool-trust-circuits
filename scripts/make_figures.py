@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """The paper's two figures, from artifacts already on disk. No GPU, no model.
 
-    python scripts/make_figures.py --results /workspace/results \\
-        --runs /workspace/repo/outputs/circuits --out figures/
+    python scripts/make_figures.py
+
+The defaults read the committed `results/` directory. Point --results/--runs elsewhere to
+draw from a fresh run.
 
 Writes circuit_map.pdf and kcurve.pdf (plus .png for quick viewing).
 
@@ -118,8 +120,8 @@ def kcurve(runs: Path, out: Path, figsize=HALF) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--results", default="/workspace/results")
-    p.add_argument("--runs", default="/workspace/repo/outputs/circuits")
+    p.add_argument("--results", default="results")
+    p.add_argument("--runs", default="results")
     p.add_argument("--out", default="figures")
     p.add_argument("--full-width", action="store_true",
                    help="draw at text width instead of half width")

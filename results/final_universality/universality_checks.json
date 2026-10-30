@@ -1,0 +1,9 @@
+{
+  "n_rows": 615,
+  "pool": "mean",
+  "self_cka_diag_min": 1.0,
+  "cka_torl_simpletir_max": 0.9432545622062711,
+  "cka_torl_demyagent_max": 0.9270554398610333,
+  "cka_simpletir_demyagent_max": 0.9567450444810116,
+  "self_overlap": 1.0
+}

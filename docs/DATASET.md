@@ -1,5 +1,13 @@
 # Layer 2 matched pairs — build provenance and schema
 
+> **Development notes.** This describes the *first* pair build. The corpus was later
+> rebuilt to perturb the corrupted value at the divergence index rather than the last
+> digit, which changed every count below. The paper uses the rebuilt corpus: **712 / 516 /
+> 216 discovery pairs** (ToRL / SimpleTIR / DemyAgent) and **34 / 22 / 28 held-out pairs**,
+> the latter being 17 / 11 / 14 problems at two pairs each. The gate structure and schema
+> in sections 2 onward still apply; the intermediate counts do not. The README and
+> `results/` are authoritative for anything the paper reports.
+
 Six JSONL files at `outputs/pairs/`, also on HuggingFace at
 `tool-trust-circuits/tool-trust-circuits` (private, `repo_type=dataset`) under `pairs/`.
 

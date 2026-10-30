@@ -37,3 +37,8 @@ hf_data/
 # Paper draft -- lives in Overleaf, which is the authoritative copy. Keeping a second
 # copy in git means two sources of truth and merge conflicts in .tex nobody wants.
 paper/
+
+# results/ IS committed on purpose -- 1.2 MB of JSON/CSV that every number in the paper is
+# computed from, so the paper is checkable without the private dataset repos. Do not add a
+# blanket results/ ignore here. Large tensors (means.pt, graph.pt, feats_*.pt) stay out.
+results/**/*.pt

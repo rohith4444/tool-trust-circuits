@@ -1,0 +1,53 @@
+{
+  "model": "torl",
+  "run": "clean",
+  "layer": 18,
+  "alpha": 144.0,
+  "n_fit": 615,
+  "n_eval": 30,
+  "discovery_delta_shift": 3.653792134831461,
+  "eval_delta_before": 0.8161764705882353,
+  "eval_delta_after": 6.698529411764706,
+  "eval_delta_shift": 5.882352941176471,
+  "eval_frac_negative_before": 0.4117647058823529,
+  "eval_frac_positive_after": 0.9411764705882353,
+  "eval_frac_sign_flipped": 0.35294117647058826,
+  "checks": {
+    "hook_unit_tests": {
+      "heads_scaled": [
+        1.0,
+        2.0,
+        1.0,
+        0.5
+      ],
+      "heads_untouched": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "ok": true
+    },
+    "n_fit": 615,
+    "n_eval": 30,
+    "identity": "ok",
+    "fit_split": {
+      "n_accept": 258,
+      "n_override": 95,
+      "how": "delta_sign"
+    },
+    "delta_distribution": {
+      "mean": 3.7338483333587646,
+      "median": 3.0,
+      "frac_positive": 0.7247191071510315
+    },
+    "cosine_delta_vs_label": {
+      "mean": -0.5999111533164978,
+      "min": -0.7249789237976074,
+      "max": -0.4352240562438965
+    },
+    "sweep_n": 356,
+    "resid_norm_at_best_layer": 181.84249877929688,
+    "improves_on_discovery": true
+  }
+}

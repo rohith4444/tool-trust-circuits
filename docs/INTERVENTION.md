@@ -1,5 +1,10 @@
 # Intervention (C2): status, results, and what is still open
 
+> **Development notes.** Written while the interventions were being tuned, so sweep
+> numbers here may predate the reported runs. The final figures are in
+> `results/intervene/final_torl_scale/` and `results/intervene/final_torl_steer/`. Section
+> 4 of the paper, not this document, states what the interventions do and do not show.
+
 Contribution 2 -- a training-free, token-free fix for Tool-Ignored, built on the circuit
 from C1. Two methods, one evaluator. ToRL only so far.
 

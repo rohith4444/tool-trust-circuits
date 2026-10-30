@@ -11,6 +11,10 @@ work**. It is the evaluation harness that produced the results in:
 - **Commit:** `3258c40bde8020958bbd66f5a5067d66bab0ae52`
 - **Copied:** 2026-09-06
 
+**Licence.** This directory is *not* covered by the repository's MIT licence. It remains
+under whatever terms ATTC released it under. Check their repository before redistributing
+it; if no licence is stated there, treat it as all rights reserved and contact the authors.
+
 ATTC's harness is itself derived from the Qwen2.5-Math / ToRA evaluation
 pipeline, as its own file headers note.
 

@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Every number section 4 of the paper needs, read off the artifacts on disk.
 
+    python scripts/paper_numbers.py
+
+The defaults read the committed `results/` directory, which is what the paper reports. To
+read a fresh run instead, point the flags at it:
+
     python scripts/paper_numbers.py --results /workspace/results \\
         --runs /workspace/repo/outputs/circuits --intervene /workspace/repo/outputs/intervene \\
         --out /workspace/outputs/paper_numbers.txt
@@ -268,9 +273,9 @@ def intervention(inter: Path) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--results", default="/workspace/results", help="localization outputs per model")
-    p.add_argument("--runs", default="/workspace/repo/outputs/circuits", help="validation run dirs")
-    p.add_argument("--intervene", default="/workspace/repo/outputs/intervene")
+    p.add_argument("--results", default="results", help="localization outputs per model")
+    p.add_argument("--runs", default="results", help="validation run dirs (final_<model>/)")
+    p.add_argument("--intervene", default="results/intervene")
     p.add_argument("--out", default=None, help="also write everything to this file")
     args = p.parse_args()
 

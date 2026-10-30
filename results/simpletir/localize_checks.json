@@ -1,0 +1,27 @@
+{
+  "n_pairs": 437,
+  "sign_flip": "ok",
+  "eap_pairs": 425,
+  "screen": {
+    "method": "eap-ig",
+    "n_nodes": 812,
+    "topn": 50
+  },
+  "patching": {
+    "pair": "simpletir_aime24_2_z0",
+    "delta_clean": 0.5,
+    "delta_corrupt": -1.75,
+    "delta_patch_all": 0.5,
+    "recovery_patch_all": 1.0,
+    "recovery_patch_none": 0.0,
+    "tol": 0.02
+  },
+  "noise_p95": 0.001372299505451601,
+  "dla_sum": {
+    "pair": "simpletir_aime24_2_z0",
+    "delta": -1.75,
+    "dla_total": -1.7490695714950562,
+    "abs_err": 0.0009304285049438477,
+    "ok": true
+  }
+}

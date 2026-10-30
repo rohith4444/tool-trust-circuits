@@ -1,5 +1,10 @@
 # Circuit pipeline: dataloader and resulting dataset
 
+> **Development notes.** Written before the pair corpus was rebuilt and before the final
+> validation runs, so pair counts and any validation figures here may not match the paper.
+> The README and `results/` are authoritative. The loader mechanics this document explains
+> are unchanged.
+
 What `scripts/run_localize.py`, `run_validate.py` and `run_universality.py` feed to the
 model, how the loader in `circuits/data/pairs.py` builds it from the released pair files,
 and how many pairs come out. Self-contained; `docs/DATASET.md` has the build provenance

@@ -68,6 +68,47 @@ python scripts/run_scale.py     --model torl --circuit outputs/circuits/torl/cir
 `scripts/paper_numbers.py` reads every artifact above and prints each number the paper
 quotes; `scripts/make_figures.py` regenerates both figures from the same files.
 
+## Reproducing the paper
+
+Every number and figure in the paper is computed from `results/`, which is committed here
+(1.2 MB of JSON and CSV). No GPU, no model download, no HuggingFace account.
+
+```sh
+uv venv .venv-tools && uv pip install --python .venv-tools pandas numpy matplotlib
+.venv-tools/bin/python scripts/paper_numbers.py     # every number, in paper order
+.venv-tools/bin/python scripts/make_figures.py      # both figures into figures/
+```
+
+Both default to reading `results/`, so neither takes an argument. Point `--results`,
+`--runs` and `--intervene` at a fresh run directory to read that instead.
+
+`paper_numbers.py` prints every quoted number in five blocks, in paper order. What backs
+what:
+
+| Paper | Artifact |
+|-------|----------|
+| Δ validity (98.0/96.3/91.8% lowered, sign at chance) | `results/{model}/pairs_summary.csv` |
+| Circuit size, layer range, head roles | `results/{model}/circuit.json`, `node_scores.csv`, `patch_results.csv` |
+| Validation table (necessity, faithfulness, specificity, self-repair) | `results/final_{model}/validation.json` |
+| Faithfulness-vs-k curve | `results/final_{model}/faithfulness_k.csv` |
+| Specificity by region | `results/final_{model}/damage.csv` |
+| Universality: 9 of 12 heads shared, Jaccard 0.70 | `results/{model}/circuit.json` |
+| CKA between models | `results/final_universality/cka_*.npy` |
+| Head scaling, α=4 | `results/intervene/final_torl_scale/` |
+| Steering, layer 18 | `results/intervene/final_torl_steer/` |
+
+**One artifact does not match the paper, by design.**
+`results/final_universality/overlap.json` reports Jaccard 0.724 over 42 of 50 common
+nodes. That is `run_universality.py` comparing the raw EAP-IG shortlists, which include
+MLPs and layer 0. The paper reports overlap over *patching-confirmed* non-layer-0 heads:
+16 of 23 shared, Jaccard 0.70, and 9 of the top 12 by recovery. `paper_numbers.py` derives
+that from `circuit.json` and prints both, so the discrepancy is visible rather than hidden.
+Use the confirmed-head figure; it is the one the circuit is defined by.
+
+`final_*` directories are the runs the paper reports. The per-model directories
+(`results/torl/` and so on) are the localization stage those runs consumed. Earlier
+exploratory runs are not included.
+
 ## Three things worth knowing before reading the code
 
 **Δ is read at the divergence token, and Z never enters it.** Δ = logit(Y) − logit(X) at
@@ -102,7 +143,12 @@ generation/         ATTC's harness, vendored (see generation/ATTRIBUTION.md)
 configs/models.py   the model registry: repos, prompt types, decoding, ATTC's numbers
 docs/               dataset, circuit, validation and intervention notes
 envs/               three pinned environments (see below)
+results/            the artifacts every paper number is computed from (1.2 MB)
+figures/            the paper's two figures, regenerable from results/
 ```
+
+`generation/` is vendored third-party code and keeps its upstream licence. Everything
+else is MIT; see [LICENSE](LICENSE).
 
 ## Environments
 
@@ -111,7 +157,7 @@ Three, because vLLM and TransformerLens pin conflicting `torch`/`transformers` v
 | Env | Contents | Where |
 |-----|----------|-------|
 | `tools` | `huggingface-hub`, `transformers`, `datasets` | laptop |
-| `gen` | `vllm`, `math_verify` | GPU pod, CUDA only |
+| `gen` | `vllm`, ATTC's grader | GPU pod, CUDA only |
 | `analysis` | `transformer-lens`, `torch`, EAP-IG | GPU pod |
 
 Requires [uv](https://docs.astral.sh/uv/).
@@ -126,12 +172,33 @@ the shell.
 
 ## Data
 
-Model weights are pulled from HF to the pod's volume cache and never stored here. Traces,
-pairs, labels and results live in private HF dataset repos; `circuits/cli.py::push_outputs`
-uploads each finished `--out` directory. Only code, docs and figures are in git.
+What is in this repo:
+
+- `results/` — the 1.2 MB of JSON and CSV every paper number is computed from. Numbers and
+  token ids only; no problem statements and no generated text.
+- `data/` — ATTC's released benchmark files, committed so the reproduction gate scores the
+  same records they scored.
+- `figures/` — the paper's two figures.
+
+What is not, and why:
+
+- **Traces (85 MB) and matched pairs (21 MB) are in private HuggingFace dataset repos.**
+  They contain full model generations across six benchmarks, and we have not released
+  them. Stages 2 through 5 read pairs, so running them needs that access.
+- **Large tensors** (`means.pt`, `graph.pt`, CKA features, 730 MB) are not committed. Those
+  are re-run inputs, not results.
+- Model weights are pulled from HF to the pod's volume cache and never stored here.
+
+To regenerate the pairs from scratch instead, run stage 0 and stage 1. That is 2,836
+problems × 3 models of vLLM generation followed by `build_pairs.py`, which needs one
+80 GB GPU and reproduces `pairs/` deterministically from the seeds in `configs/models.py`.
+`circuits/cli.py::push_outputs` uploads each finished `--out` directory if you set
+`HF_TOKEN`; it only warns when the token is missing, so check its output if you expect a
+push.
 
 ## Status
 
-The workshop submission is done. Next work is on the problems listed under *What it does
-not show*, and on widening the setting beyond a code interpreter to context-versus-prior
-conflict more generally.
+Accepted at the NeurIPS 2026 EvoRobust workshop (non-archival); this is the camera-ready
+code release. Next work is on the problems listed under *What it does not show*, and on
+widening the setting beyond a code interpreter to context-versus-prior conflict more
+generally.

@@ -1,0 +1,52 @@
+{
+  "model": "torl",
+  "run": "clean",
+  "policy": "attn_role",
+  "alpha": 4.0,
+  "beta": 1.0,
+  "n_nodes": 37,
+  "n_fit_runs": 356,
+  "n_eval_runs": 17,
+  "discovery_delta_shift": 1.8833333333333333,
+  "eval_delta_before": 0.8161764705882353,
+  "eval_delta_after": 3.2205882352941178,
+  "eval_delta_shift": 2.4044117647058822,
+  "eval_frac_negative_before": 0.4117647058823529,
+  "eval_frac_positive_after": 0.8823529411764706,
+  "eval_frac_sign_flipped": 0.29411764705882354,
+  "checks": {
+    "circuit": {
+      "model": "torl",
+      "n_pairs": 615,
+      "topn": 50,
+      "noise_p95": 0.00112041321837977
+    },
+    "n_nodes_in_file": 50,
+    "n_nodes_used": 37,
+    "n_fit_runs": 356,
+    "n_eval_runs": 17,
+    "identity": "ok",
+    "role_transfer": {
+      "n_nodes": 37,
+      "n_agree": 19,
+      "frac_agree": 0.5135135135135135,
+      "run": "clean"
+    },
+    "sweep_n": 150,
+    "policies": {
+      "dla_sign": {
+        "n_up": 8,
+        "n_down": 29,
+        "n_neutral": 0,
+        "n_total": 37
+      },
+      "attn_role": {
+        "n_up": 19,
+        "n_down": 0,
+        "n_neutral": 18,
+        "n_total": 37
+      }
+    },
+    "improves_on_discovery": true
+  }
+}

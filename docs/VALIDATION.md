@@ -1,5 +1,10 @@
 # Circuit validation: what went wrong and what changed
 
+> **Development notes.** This is the record of how the metrics were fixed, including
+> intermediate configurations that were tried and discarded. For the final reported
+> numbers, read `results/final_{model}/validation.json` or run
+> `scripts/paper_numbers.py --results results --runs results`.
+
 Written after the 2026-09-12 debugging session. The numbers here are ToRL unless stated.
 Every configuration mentioned is reproducible from `scripts/run_validate.py` flags.
 

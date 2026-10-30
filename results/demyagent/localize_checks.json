@@ -1,0 +1,27 @@
+{
+  "n_pairs": 182,
+  "sign_flip": "ok",
+  "eap_pairs": 182,
+  "screen": {
+    "method": "eap-ig",
+    "n_nodes": 1188,
+    "topn": 50
+  },
+  "patching": {
+    "pair": "demyagent_gsm8k_1_z0",
+    "delta_clean": 9.875,
+    "delta_corrupt": -0.125,
+    "delta_patch_all": 9.875,
+    "recovery_patch_all": 1.0,
+    "recovery_patch_none": 0.0,
+    "tol": 0.02
+  },
+  "noise_p95": 0.002067152939786789,
+  "dla_sum": {
+    "pair": "demyagent_gsm8k_1_z0",
+    "delta": -0.125,
+    "dla_total": -0.18812334537506104,
+    "abs_err": 0.06312334537506104,
+    "ok": true
+  }
+}
